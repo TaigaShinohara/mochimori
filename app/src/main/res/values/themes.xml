@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MochiMori M3 theme (v0.3.0).
+  Base: Theme.Material3.DayNight (system dark-theme following; the v0.2.0
+  Light lock is removed). All colour comes from the semantic tokens in
+  colors.xml (light) / values-night/colors.xml (dark). On Android 12+,
+  Dynamic Colors are applied on top of this theme by MochiApp for the
+  standard M3 roles only; the custom state roles below are not overridden.
+
+  Type scale and component defaults (button shapes, switch, navigation bar
+  indicator, text appearances) come from the Material3 theme itself; the
+  shape appearances below pin the project's shape tokens.
+-->
+<resources>
+
+    <!-- Shape tokens (M3 scale). Pills stay reserved for buttons and the
+         navigation indicator; cards use Medium, the face keeps its own. -->
+    <style name="ShapeAppearance.Mochi.ExtraSmall" parent="ShapeAppearance.Material3.Corner.ExtraSmall">
+        <item name="cornerSize">4dp</item>
+    </style>
+    <style name="ShapeAppearance.Mochi.Small" parent="ShapeAppearance.Material3.Corner.Small">
+        <item name="cornerSize">8dp</item>
+    </style>
+    <style name="ShapeAppearance.Mochi.Medium" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="ShapeAppearance.Mochi.Large" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerSize">20dp</item>
+    </style>
+    <style name="ShapeAppearance.Mochi.ExtraLarge" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerSize">28dp</item>
+    </style>
+
+    <style name="Theme.MochiMori" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Primary -->
+        <item name="colorPrimary">@color/m3_primary</item>
+        <item name="colorOnPrimary">@color/m3_onPrimary</item>
+        <item name="colorPrimaryContainer">@color/m3_primaryContainer</item>
+        <item name="colorOnPrimaryContainer">@color/m3_onPrimaryContainer</item>
+        <!-- Secondary -->
+        <item name="colorSecondary">@color/m3_secondary</item>
+        <item name="colorOnSecondary">@color/m3_onSecondary</item>
+        <item name="colorSecondaryContainer">@color/m3_secondaryContainer</item>
+        <item name="colorOnSecondaryContainer">@color/m3_onSecondaryContainer</item>
+        <!-- Tertiary -->
+        <item name="colorTertiary">@color/m3_tertiary</item>
+        <item name="colorOnTertiary">@color/m3_onTertiary</item>
+        <item name="colorTertiaryContainer">@color/m3_tertiaryContainer</item>
+        <item name="colorOnTertiaryContainer">@color/m3_onTertiaryContainer</item>
+        <!-- Error -->
+        <item name="colorError">@color/m3_error</item>
+        <item name="colorOnError">@color/m3_onError</item>
+        <item name="colorErrorContainer">@color/m3_errorContainer</item>
+        <item name="colorOnErrorContainer">@color/m3_onErrorContainer</item>
+        <!-- Background / surface -->
+        <item name="android:colorBackground">@color/m3_background</item>
+        <item name="colorOnBackground">@color/m3_onBackground</item>
+        <item name="colorSurface">@color/m3_surface</item>
+        <item name="colorOnSurface">@color/m3_onSurface</item>
+        <item name="colorSurfaceVariant">@color/m3_surfaceVariant</item>
+        <item name="colorOnSurfaceVariant">@color/m3_onSurfaceVariant</item>
+        <item name="colorSurfaceDim">@color/m3_surfaceDim</item>
+        <item name="colorSurfaceBright">@color/m3_surfaceBright</item>
+        <item name="colorSurfaceContainerLowest">@color/m3_surfaceContainerLowest</item>
+        <item name="colorSurfaceContainerLow">@color/m3_surfaceContainerLow</item>
+        <item name="colorSurfaceContainer">@color/m3_surfaceContainer</item>
+        <item name="colorSurfaceContainerHigh">@color/m3_surfaceContainerHigh</item>
+        <item name="colorSurfaceContainerHighest">@color/m3_surfaceContainerHighest</item>
+        <item name="colorOutline">@color/m3_outline</item>
+        <item name="colorOutlineVariant">@color/m3_outlineVariant</item>
+        <item name="colorSurfaceInverse">@color/m3_inverseSurface</item>
+        <item name="colorOnSurfaceInverse">@color/m3_inverseOnSurface</item>
+        <item name="colorPrimaryInverse">@color/m3_inversePrimary</item>
+        <!-- Custom roles -->
+        <item name="colorMochiWarning">@color/mochi_warning</item>
+        <item name="colorOnMochiWarning">@color/mochi_on_warning</item>
+        <item name="colorMochiWarningContainer">@color/mochi_warning_container</item>
+        <item name="colorOnMochiWarningContainer">@color/mochi_on_warning_container</item>
+        <item name="colorMochiStateCool">@color/mochi_state_cool</item>
+        <item name="colorOnMochiStateCool">@color/mochi_on_state_cool</item>
+        <item name="colorMochiStateCoolContainer">@color/mochi_state_cool_container</item>
+        <!-- Shape tokens (component-level shape appearances) -->
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Mochi.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Mochi.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Mochi.Large</item>
+        <!-- Edge-to-edge: transparent system bars, content draws behind -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- windowLightStatusBar is set in code per night mode (a values-night
+             style would replace, not merge, this whole theme). -->
+    </style>
+</resources>

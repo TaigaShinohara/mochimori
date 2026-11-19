@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MochiMori M3 colour tokens — LIGHT scheme.
+  This file is the only place light-scheme literals live; screens resolve
+  semantic roles through the theme (?attr/colorPrimary etc.).
+  Derived from the art direction (deep navy + soft blue-white, seed #0277BD).
+  The dark scheme with the same names lives in values-night/colors.xml.
+
+  State colours are FIXED roles (art direction: roles never change meaning):
+    cool / normal   -> primary family (blue)
+    warning         -> custom mochiWarning family (orange; M3 has no warning role)
+    emergency       -> error family (pink #C2185B, used sparingly)
+    aux structure   -> tertiary family (purple)
+  mochiStateCool* are the face's fixed state colours: they are NOT part of
+  the roles Dynamic Color overrides, so the two faces keep their meaning
+  even when Material You system colours are applied to the chrome.
+-->
+<resources>
+    <!-- Primary (cool blue) -->
+    <color name="m3_primary">#0277BD</color>
+    <color name="m3_onPrimary">#FFFFFF</color>
+    <color name="m3_primaryContainer">#D3E9F7</color>
+    <color name="m3_onPrimaryContainer">#04354E</color>
+    <!-- Secondary (deep navy support) -->
+    <color name="m3_secondary">#46617A</color>
+    <color name="m3_onSecondary">#FFFFFF</color>
+    <color name="m3_secondaryContainer">#D6E4F0</color>
+    <color name="m3_onSecondaryContainer">#162A3A</color>
+    <!-- Tertiary (purple, auxiliary structure) -->
+    <color name="m3_tertiary">#6A1B9A</color>
+    <color name="m3_onTertiary">#FFFFFF</color>
+    <color name="m3_tertiaryContainer">#F1E6F7</color>
+    <color name="m3_onTertiaryContainer">#2A0A45</color>
+    <!-- Error (emergency pink, sparing use) -->
+    <color name="m3_error">#C2185B</color>
+    <color name="m3_onError">#FFFFFF</color>
+    <color name="m3_errorContainer">#FCE7F1</color>
+    <color name="m3_onErrorContainer">#5F0A2C</color>
+    <!-- Surfaces (soft blue-white) -->
+    <color name="m3_background">#F7FAFC</color>
+    <color name="m3_onBackground">#10222E</color>
+    <color name="m3_surface">#F7FAFC</color>
+    <color name="m3_onSurface">#10222E</color>
+    <color name="m3_surfaceVariant">#E1EBF2</color>
+    <color name="m3_onSurfaceVariant">#3F5462</color>
+    <color name="m3_outline">#6E8391</color>
+    <color name="m3_outlineVariant">#C3D2DC</color>
+    <color name="m3_surfaceDim">#D5E0E8</color>
+    <color name="m3_surfaceBright">#F7FAFC</color>
+    <color name="m3_surfaceContainerLowest">#FFFFFF</color>
+    <color name="m3_surfaceContainerLow">#EFF5F9</color>
+    <color name="m3_surfaceContainer">#E8F1F7</color>
+    <color name="m3_surfaceContainerHigh">#DFEAF2</color>
+    <color name="m3_surfaceContainerHighest">#D5E4EE</color>
+    <color name="m3_inverseSurface">#21313B</color>
+    <color name="m3_inverseOnSurface">#EAF3F8</color>
+    <color name="m3_inversePrimary">#7CC7F0</color>
+    <color name="m3_scrim">#000000</color>
+
+    <!-- Custom warning role (M3 has no standard warning family) -->
+    <color name="mochi_warning">#E65100</color>
+    <color name="mochi_on_warning">#FFFFFF</color>
+    <color name="mochi_warning_container">#FFEDD9</color>
+    <color name="mochi_on_warning_container">#4A1E00</color>
+
+    <!-- Fixed state colours for the central face (Dynamic-Color-proof) -->
+    <color name="mochi_state_cool">#0277BD</color>
+    <color name="mochi_on_state_cool">#FFFFFF</color>
+    <color name="mochi_state_cool_container">#E0F2FB</color>
+</resources>

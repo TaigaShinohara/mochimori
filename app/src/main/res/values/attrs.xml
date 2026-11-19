@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Custom semantic colour roles that M3 does not standardise.
+  - Warning family: "節電できてない / fixable waste" (orange). Documented in
+    docs/ART_DIRECTION.md and docs/UI_CATALOG.md.
+  - State-cool family: the central face's fixed "ひんやり" colours. Kept as
+    custom attrs so Dynamic Color (which only overrides standard M3 roles)
+    can never change what the face's state colours mean.
+-->
+<resources>
+    <attr name="colorMochiWarning" format="color" />
+    <attr name="colorOnMochiWarning" format="color" />
+    <attr name="colorMochiWarningContainer" format="color" />
+    <attr name="colorOnMochiWarningContainer" format="color" />
+    <attr name="colorMochiStateCool" format="color" />
+    <attr name="colorOnMochiStateCool" format="color" />
+    <attr name="colorMochiStateCoolContainer" format="color" />
+</resources>

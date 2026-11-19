@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MochiMori M3 colour tokens — DARK scheme. Same token names as
+  values/colors.xml; only the values change. Roles keep their meaning.
+-->
+<resources>
+    <!-- Primary (cool blue, lightened for dark surfaces) -->
+    <color name="m3_primary">#7CC7F0</color>
+    <color name="m3_onPrimary">#00344F</color>
+    <color name="m3_primaryContainer">#004B73</color>
+    <color name="m3_onPrimaryContainer">#CDE9FB</color>
+    <!-- Secondary -->
+    <color name="m3_secondary">#A9C7DE</color>
+    <color name="m3_onSecondary">#233645</color>
+    <color name="m3_secondaryContainer">#354B5E</color>
+    <color name="m3_onSecondaryContainer">#D6E4F0</color>
+    <!-- Tertiary -->
+    <color name="m3_tertiary">#CE9BE8</color>
+    <color name="m3_onTertiary">#3A1454</color>
+    <color name="m3_tertiaryContainer">#532B70</color>
+    <color name="m3_onTertiaryContainer">#F1E6F7</color>
+    <!-- Error -->
+    <color name="m3_error">#F78FB8</color>
+    <color name="m3_onError">#5C0A2B</color>
+    <color name="m3_errorContainer">#7A1E46</color>
+    <color name="m3_onErrorContainer">#FCE7F1</color>
+    <!-- Surfaces (deep navy) -->
+    <color name="m3_background">#0B1C26</color>
+    <color name="m3_onBackground">#DDEAF2</color>
+    <color name="m3_surface">#0B1C26</color>
+    <color name="m3_onSurface">#DDEAF2</color>
+    <color name="m3_surfaceVariant">#22333E</color>
+    <color name="m3_onSurfaceVariant">#B4C6D2</color>
+    <color name="m3_outline">#8299A8</color>
+    <color name="m3_outlineVariant">#35454F</color>
+    <color name="m3_surfaceDim">#0B1C26</color>
+    <color name="m3_surfaceBright">#2A404D</color>
+    <color name="m3_surfaceContainerLowest">#06141C</color>
+    <color name="m3_surfaceContainerLow">#0F2531</color>
+    <color name="m3_surfaceContainer">#142C3A</color>
+    <color name="m3_surfaceContainerHigh">#1A3543</color>
+    <color name="m3_surfaceContainerHighest">#213E4D</color>
+    <color name="m3_inverseSurface">#DDEAF2</color>
+    <color name="m3_inverseOnSurface">#21313B</color>
+    <color name="m3_inversePrimary">#0277BD</color>
+    <color name="m3_scrim">#000000</color>
+
+    <!-- Custom warning role -->
+    <color name="mochi_warning">#FFAB7A</color>
+    <color name="mochi_on_warning">#4A1E00</color>
+    <color name="mochi_warning_container">#5C2E0E</color>
+    <color name="mochi_on_warning_container">#FFEDD9</color>
+
+    <!-- Fixed state colours for the central face -->
+    <color name="mochi_state_cool">#7CC7F0</color>
+    <color name="mochi_on_state_cool">#00344F</color>
+    <color name="mochi_state_cool_container">#1D3242</color>
+</resources>

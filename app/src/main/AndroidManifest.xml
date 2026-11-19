@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Only the write-settings capability is used (via the system grant
+         screen). No accessibility, no WRITE_SECURE_SETTINGS, no device admin.
+         VIBRATE (v0.3.5, at the user's request) is a normal permission — no
+         dialog — used only for the face's motion-synced haptic feedback. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <application
+        android:name=".MochiApp"
+        android:allowBackup="true"
+        android:label="もち守り"
+        android:theme="@style/Theme.MochiMori">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Periodic battery check (AlarmManager, ~15 min). Not exported. -->
+        <receiver
+            android:name=".BatteryCheckReceiver"
+            android:exported="false" />
+    </application>
+</manifest>
