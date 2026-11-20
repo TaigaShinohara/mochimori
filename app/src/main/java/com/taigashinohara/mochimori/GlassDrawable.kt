@@ -145,6 +145,47 @@ class GlassDrawable(
             GlassDrawable(baseColor, 240, 224, radiusPx, night).apply { setEdgeWidthPx(edgePx) }
 
         /**
+         * Decorative glass （飾りガラス）: no text ever sits on it, so it
+         * takes the skill's thinnest surface — white 44%→36% (light) /
+         * 9%→5% (dark) — with the same specular edge as every other
+         * glass surface. Used for the plate behind the home face
+         * (layout plan A, v0.3.11): the plate only has to read as the
+         * same glass family as the vessel and the cards, never to carry
+         * information itself.
+         */
+        fun decorative(radiusPx: Float, night: Boolean, edgePx: Float): GlassDrawable =
+            if (night) {
+                GlassDrawable(android.graphics.Color.WHITE, 23, 13, radiusPx, true)
+            } else {
+                GlassDrawable(android.graphics.Color.WHITE, 112, 92, radiusPx, false)
+            }.apply { setEdgeWidthPx(edgePx) }
+
+        /**
+         * Pill chip for the home screen's "数値を見る" toggle (layout
+         * plan A, v0.3.11). The surface is the reading-glass recipe
+         * (white 62%→54% light / 19%→13% dark), and in the dark scheme
+         * the paper veil is stronger than the card recipe's (alpha 230
+         * instead of 180): the chip floats directly under the face,
+         * inside the foundation's centre light, which is the brightest
+         * backdrop any small text in the app sits on. Static worst-case
+         * composites over that whole region (gradient + all three
+         * lights, both glass edges) put the secondary label at
+         * ≈5.8:1 (light) / ≈5.2:1 (dark) — above the 4.5:1 gate with
+         * margin, where the plain card recipe measured only ≈4.6:1 in
+         * the dark scheme. The light scheme needs no veil (≈7:1+
+         * without one on the reading glass).
+         */
+        fun chip(radiusPx: Float, night: Boolean, edgePx: Float, surfaceColor: Int): GlassDrawable =
+            if (night) {
+                GlassDrawable(
+                    android.graphics.Color.WHITE, 48, 33, radiusPx, true,
+                    veilColor = surfaceColor, veilAlpha = 230,
+                )
+            } else {
+                GlassDrawable(android.graphics.Color.WHITE, 158, 138, radiusPx, false)
+            }.apply { setEdgeWidthPx(edgePx) }
+
+        /**
          * Band for the toolbar / navigation bar (square corners).
          *
          * v0.3.9: this is NO LONGER reading glass. On the real device

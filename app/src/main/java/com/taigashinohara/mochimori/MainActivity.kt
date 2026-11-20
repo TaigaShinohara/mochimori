@@ -6,6 +6,9 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.RippleDrawable
+import android.graphics.drawable.ShapeDrawable
+import android.graphics.drawable.shapes.RoundRectShape
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -19,6 +22,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -85,6 +89,14 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
  * labels move to the secondary role, and the filled buttons' horizontal
  * padding joins the spacing scale (28dp -> 24dp). All three text fixes
  * are contrast-gate driven; no behaviour changes.
+ * v0.3.11: home layout plan A, chosen by the user from generated
+ * mock-ups: a thin decorative-glass plate now sits behind the face so
+ * face + plate read as one cluster, the cluster rides a little higher
+ * (spacer weights 3:4 instead of 1:1), the state label and reason pull
+ * in tighter under the face, and the "数値を見る" toggle becomes a
+ * small glass pill chip (GlassDrawable.chip; same fold behaviour, same
+ * secondary label — worst-case contrast ≈5.8:1 light / ≈5.2:1 dark).
+ * The face itself, the judgement and every other screen are unchanged.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -107,6 +119,7 @@ class MainActivity : AppCompatActivity() {
     private val taBodyLarge = com.google.android.material.R.style.TextAppearance_Material3_BodyLarge
     private val taBodyMedium = com.google.android.material.R.style.TextAppearance_Material3_BodyMedium
     private val taBodySmall = com.google.android.material.R.style.TextAppearance_Material3_BodySmall
+    private val taLabelLarge = com.google.android.material.R.style.TextAppearance_Material3_LabelLarge
 
     // Spacing rhythm tokens (v0.3.1 design pass): one page margin, one card
     // gap, one card padding, one primary-action gap for every screen, so all
@@ -123,6 +136,19 @@ class MainActivity : AppCompatActivity() {
         // proportions, flame/flake headroom, ground shadow — lives in
         // BatteryFaceView; this token only fixes the slot it is given.
         const val FACE_H = 320
+
+        // Glass plate behind the face (layout plan A, v0.3.11): the
+        // plate is the battery BODY's rect grown by these amounts —
+        // 24dp at the sides, 28dp above (it also covers the cap, which
+        // stands ~11dp proud of the body) and 16dp below (over the
+        // ground shadow's zone). Radius is the ExtraLarge shape token.
+        // The body's rect itself is BatteryFaceView's geometry; the
+        // plate mirrors its formula in buildHome() and never changes
+        // the face's own size (FACE_H above is untouched).
+        const val FACE_PLATE_PAD_H = 24
+        const val FACE_PLATE_TOP = 28
+        const val FACE_PLATE_BOTTOM = 16
+        const val FACE_PLATE_RADIUS = 28
     }
 
     private fun themeColor(attr: Int): Int = MaterialColors.getColor(this, attr, Color.BLACK)
@@ -388,6 +414,52 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Glass pill chip for the home screen's numbers toggle (layout
+     * plan A, v0.3.11): the flat text button becomes a small pill of
+     * reading glass (GlassDrawable.chip) with the same secondary
+     * label as the text buttons — the chip recipe's worst-case
+     * contrast is ≈5.8:1 (light) / ≈5.2:1 (dark), above the 4.5:1
+     * gate (see the factory's doc). No icon: the mock-up's bar-chart
+     * glyph has no existing part to reuse, and the label alone names
+     * what the chip does (audit M-2's rule). The press feedback is a
+     * ripple bounded by a pill mask over the glass; the touch target
+     * keeps the 48dp minimum. The fold behaviour is unchanged — this
+     * is the toggle's new clothes, not a new control. A plain
+     * TextView carries it so no button tint machinery can wash the
+     * glass out.
+     */
+    private fun glassChip(text: String, action: () -> Unit): TextView {
+        val radiusPx = dp(24).toFloat() // half the 48dp target height: a true pill
+        val glass = GlassDrawable.chip(
+            radiusPx, isNight(), dp(1).toFloat(),
+            themeColor(com.google.android.material.R.attr.colorSurface),
+        )
+        val mask = ShapeDrawable(RoundRectShape(FloatArray(8) { radiusPx }, null, null)).apply {
+            paint.color = Color.WHITE
+        }
+        val chip = TextView(this).apply {
+            this.text = text
+            setTextAppearance(taLabelLarge)
+            setTextColor(colorSecondary)
+            background = RippleDrawable(
+                ColorStateList.valueOf(ColorUtils.setAlphaComponent(colorSecondary, 48)),
+                glass,
+                mask,
+            )
+            gravity = Gravity.CENTER
+            minimumHeight = dp(48) // M3 minimum touch target, same as the text buttons
+            setPadding(dp(20), 0, dp(20), 0)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { action() }
+        }
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(8)
+        chip.layoutParams = lp
+        return chip
+    }
+
+    /**
      * Card used only where a contained group is meaningful — since
      * v0.3.8 a Simple Glass surface (see GlassDrawable): the neutral
      * surface-container card becomes reading glass (white 62%→54%
@@ -561,7 +633,9 @@ class MainActivity : AppCompatActivity() {
         // spacers above and below absorb the slack, so the face no longer
         // huddles in the top half with a dead lower half (v0.3.4). When the
         // content outgrows the viewport the spacers collapse and it scrolls.
-        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Layout plan A (v0.3.11): the weights go 3:4 instead of 1:1, so
+        // the cluster rides a little higher, as in the chosen mock-up.
+        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 3f))
         val face = BatteryFaceView(this).apply {
             saving = result.saving
             charging = result.state == BatteryJudge.State.CHARGING
@@ -572,7 +646,45 @@ class MainActivity : AppCompatActivity() {
             // pulses live and die with the home tab.
             hapticsEnabled = prefs.getBoolean("haptics", true)
         }
-        col.addView(face, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H)))
+        // Layout plan A (v0.3.11): a thin decorative-glass plate behind
+        // the face, one size larger than the battery body, so face +
+        // plate read as a single cluster. The plate is a layout element
+        // only — BatteryFaceView's drawing is untouched, and the face
+        // slot keeps its FACE_H height and full width. The body's rect
+        // is mirrored from BatteryFaceView.onSizeChanged (top zone
+        // 58dp, shadow zone 20dp, body height capped at 272dp, width =
+        // height / 1.55 capped at 60% of the slot, top biased 0.35 into
+        // the leftover height); the plate grows that rect by the
+        // FACE_PLATE_* tokens.
+        val faceFrame = FrameLayout(this)
+        run {
+            val density = resources.displayMetrics.density
+            val slotWDp = resources.displayMetrics.widthPixels / density - 2 * PAGE_PAD_H
+            val availHDp = FACE_H - 58f - 20f
+            var bodyHDp = minOf(availHDp, 272f)
+            var bodyWDp = bodyHDp / 1.55f
+            val maxBodyWDp = slotWDp * 0.60f
+            if (bodyWDp > maxBodyWDp) {
+                bodyWDp = maxBodyWDp
+                bodyHDp = bodyWDp * 1.55f
+            }
+            val bodyTopDp = 58f + (availHDp - bodyHDp) * 0.35f
+            val plate = View(this).apply {
+                background = GlassDrawable.decorative(
+                    dp(FACE_PLATE_RADIUS).toFloat(), isNight(), dp(1).toFloat(),
+                )
+            }
+            faceFrame.addView(
+                plate,
+                FrameLayout.LayoutParams(
+                    dp((bodyWDp + 2 * FACE_PLATE_PAD_H).toInt()),
+                    dp((bodyHDp + FACE_PLATE_TOP + FACE_PLATE_BOTTOM).toInt()),
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ).apply { topMargin = dp((bodyTopDp - FACE_PLATE_TOP).toInt()) },
+            )
+        }
+        faceFrame.addView(face, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        col.addView(faceFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H)))
 
         val (labelText, accent) = when (result.state) {
             BatteryJudge.State.SAVING -> "節電できてる" to colorCool
@@ -581,7 +693,20 @@ class MainActivity : AppCompatActivity() {
             BatteryJudge.State.UNKNOWN -> "確認中" to colorOnSurfaceVariant
             BatteryJudge.State.NOT_SAVING -> "節電できてない" to colorWarning
         }
-        col.addView(label(labelText, taHeadline, literalColor = accent))
+        // Layout plan A (v0.3.11): label + reason pull in tighter under
+        // the face so the three read as one block — the state label is
+        // pulled 8dp up into the face slot's empty shadow zone (the
+        // drawn shadow ends ~4dp above the slot's bottom edge, so
+        // nothing overlaps) and the label→reason gap closes to 4dp.
+        // Both moves stay inside the spacing scale.
+        val stateLabel = label(labelText, taHeadline, literalColor = accent)
+        stateLabel.setPadding(0, dp(4), 0, 0)
+        col.addView(
+            stateLabel,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(-8)
+            },
+        )
         // Reason: BodyLarge on onSurface. onSurfaceVariant at this size was
         // too dim to read on the dark theme (user screenshot, v0.3.4).
         col.addView(label(result.reason, taBodyLarge, literalColor = colorOnSurface))
@@ -658,14 +783,15 @@ class MainActivity : AppCompatActivity() {
                 " ・ 温度 ${if (s.tempKnown) "${"%.1f".format(s.tempC)}℃" else "—"}" +
                 " ・ 明るさ ${if (s.brightness >= 0) "${s.brightness}/255" else "—"}",
         ).joinToString(" ・ ")
-        col.addView(textButton(if (detailsOpen) "数値を閉じる" else "数値を見る") {
+        col.addView(glassChip(if (detailsOpen) "数値を閉じる" else "数値を見る") {
             detailsOpen = !detailsOpen
             showScreen(0)
         })
         if (detailsOpen) {
             col.addView(label(detailsText, taBodySmall, literalColor = colorOnSurfaceVariant))
         }
-        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
+        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
         return ScrollView(this).apply {
             isFillViewport = true
             addView(col, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
