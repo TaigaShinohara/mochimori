@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Home-screen widget layout (v0.3.12). RemoteViews-safe views only.
-  The panel is the Simple Glass language (see drawable/widget_background):
-  a translucent glass surface with the specular edge, in light and dark
-  variants. The face is a still Bitmap rendered by WidgetFaceRenderer;
-  the label mirrors the home screen's one-word state labels and the
-  percent is the one number the widget shows.
+  The panel is a plain surface-colour panel with rounded corners (see
+  drawable/widget_background; the glass treatment was removed in the
+  v0.3.21 M3 standardisation). The face is a still Bitmap rendered by
+  WidgetFaceRenderer; the label mirrors the home screen's one-word
+  state labels and the percent is the one number the widget shows.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"

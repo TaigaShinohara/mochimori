@@ -4,13 +4,11 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.hardware.Sensor
@@ -91,39 +89,39 @@ import kotlin.math.tan
  * it flexes between a floor and 320dp so the whole home screen fits
  * without scrolling, and this view's geometry follows the slot it is
  * given. The body's rect comes from the shared bodyRectDp() formula
- * (the home screen's glass plate mirrors the same function, so the
- * two can never drift apart): the flame/cap headroom and the shadow
- * zone scale with the slot height instead of staying at their 320dp
- * values, and the decorative sizes that were tuned at full size
+ * (the home screen's glass plate mirrored the same function until
+ * v0.3.20; the plate is gone in v0.3.21 and the formula is now this
+ * view's alone): the flame/cap headroom and the shadow zone scale
+ * with the slot height instead of staying at their 320dp values,
+ * and the decorative sizes that were tuned at full size
  * (cap height, shell inset and radii, outline and meniscus strokes,
- * crystal and sparkle radii, wave amplitudes) scale by sizeScale so
+ * crystal radii, wave amplitudes) scale by sizeScale so
  * a small face is the same face, smaller — never a clipped or
  * squashed one. At a 320dp slot every number reduces to exactly the
  * pre-v0.3.19 geometry.
  *
  * v0.3.10 glass vessel (user: "UIアートはシンプルガラスにしよう" —
- * audit docs/GLASS_REVIEW_v0.3.9.md): until now the shell was an
- * OPAQUE tint (a coloured-plastic read) and this face was audited but
- * exempted. The body is now drawn as a glass vessel in the same
- * language as the app's GlassDrawable surfaces:
- * - the shell fill is a translucent role-tint glass (alpha
- *   240→230→220, the same weight family as the stage cards' tint
- *   glass), so the aura and the foundation's light show through the
- *   rim and the vessel reads as glass holding the liquid, not as a
- *   painted can. The cavity stays opaque — the level must read.
- * - a 1dp specular rim runs just inside the outline, with the
- *   skill's exact edge gradient (white 75%→15% light / 38%→6% dark),
- *   replacing the flat white strip that used to sit on the top edge.
- * - the left reflection band is now a soft gradient that melts into
- *   the glass (white 36 → 0) instead of a hard-edged flat band.
- * - the cavity gets a whisper of depth shading (a darkening at the
- *   top inside edge, a brightening at the bottom) so the interior
- *   reads as the inside of a vessel.
- * - the outline's top stop is lightened (white blend 0.30 → 0.45):
- *   the rim catches the light from above like glass, while the mid
- *   stop stays the pure state colour, so state discrimination —
- *   carried by the outline, the liquid and the flames/crystals —
- *   is unchanged.
+ * audit docs/GLASS_REVIEW_v0.3.9.md): the body was drawn as a glass
+ * vessel in the same language as the app's GlassDrawable surfaces —
+ * a translucent role-tint shell, a 1dp specular rim, a soft left
+ * reflection band, cavity depth shading and a lightened outline top.
+ *
+ * v0.3.21 plain vessel (user: "Material Design スキルで全体を見直
+ * して。無駄な装飾を消して"; audit docs/M3_REVIEW_v0.3.20.md F-4):
+ * the glass treatment and the decorative layer are removed with the
+ * rest of the app's Simple Glass. The shell is the state container
+ * colour as an opaque solid, the outline is the state colour as a
+ * solid stroke, and the cavity is the same neutral it was. Gone:
+ * the aura behind the body, the ground shadow, the sparkles around
+ * the cool face, the embers above the flames, the gloss band, the
+ * specular rim, the cavity shading, the bolt's glow and edge
+ * highlight, the crystals' halo pass and the cap's highlight line.
+ * Kept, because they ARE the state language: the liquid (its depth
+ * gradient stays — it is how the level reads), the waves, ripples,
+ * droplets and bubbles, the tilt, the layered flames, the snow
+ * crystals, the bolt, and the cap's metal gradient. The bottom zone
+ * of bodyRectDp stays in the geometry (the home layout's spacing
+ * was tuned with it) even though nothing is drawn in it now.
  *
  * v0.3.8 liquid pass (user: "さらに滑らかに／器内をバシャバシャと"):
  * - Smoothness: the surface is sampled at 44 points and drawn as a
@@ -585,13 +583,6 @@ class BatteryFaceView @JvmOverloads constructor(
     private val density = resources.displayMetrics.density
     private fun dp(v: Float): Float = v * density
 
-    /** Night scheme, for the specular rim's edge alphas (v0.3.10).
-     *  The theme follows the system night mode, so the configuration
-     *  is the same source the resolved colours come from. */
-    private val nightMode: Boolean =
-        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
-
     // ---- State colours from the theme's fixed state roles (fallbacks are
     // the art-direction literals, used only if a theme lacks the attrs).
     private val cool = MaterialColors.getColor(context, R.attr.colorMochiStateCool, Color.rgb(0x02, 0x77, 0xBD))
@@ -615,7 +606,6 @@ class BatteryFaceView @JvmOverloads constructor(
     private val hotOuter = ColorUtils.blendARGB(hot, Color.rgb(0xBF, 0x36, 0x00), 0.45f)
     private val hotInner = ColorUtils.blendARGB(hot, Color.WHITE, 0.35f)
     private val hotCore = ColorUtils.blendARGB(hot, Color.rgb(0xFF, 0xF3, 0xB0), 0.75f)
-    private val emberColor = ColorUtils.blendARGB(hot, Color.rgb(0xFF, 0xD5, 0x4F), 0.55f)
     private val capLight = ColorUtils.blendARGB(neutral, Color.WHITE, 0.65f)
     private val capMid = ColorUtils.blendARGB(neutral, Color.WHITE, 0.20f)
     private val capDark = ColorUtils.blendARGB(neutral, Color.BLACK, 0.28f)
@@ -629,46 +619,21 @@ class BatteryFaceView @JvmOverloads constructor(
          * a muddy brown-grey on the dark theme).
          */
         val cavity: Int = ColorUtils.blendARGB(cavityBase, accent, 0.10f)
-        var glass: Shader? = null
+        /**
+         * The bolt's fill (v0.3.21): the on-accent colour lightened
+         * toward white — the value the middle stop of the old bolt
+         * gradient carried, now the bolt's single flat colour.
+         */
+        val boltFill: Int = ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f)
         var liquid: Shader? = null
-        var outline: Shader? = null
-        var aura: Shader? = null
-        var bolt: Shader? = null
-        var cavityShade: Shader? = null
-        fun build(top: Float, bottom: Float, innerTop: Float, innerBottom: Float, cx: Float, cy: Float, auraR: Float) {
-            // Glass vessel (v0.3.10): the shell is a translucent
-            // role-tint glass, not an opaque tint — the same weight
-            // family as the stage cards' tint glass (94%→88%), with a
-            // gentle top-to-bottom step. What shows through is the
-            // aura and the foundation's light, strongest at the rim
-            // ring between the outline and the (opaque) cavity.
-            glass = LinearGradient(
-                0f, top, 0f, bottom,
-                intArrayOf(
-                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(container, Color.WHITE, 0.50f), 240),
-                    ColorUtils.setAlphaComponent(container, 230),
-                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(container, accent, 0.15f), 220),
-                ),
-                floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
-            )
-            // Interior depth shading (v0.3.10): a whisper of shadow
-            // under the vessel's top inside edge and a brightening at
-            // its floor, so the cavity reads as the inside of a glass
-            // vessel rather than a flat panel. Drawn over the cavity,
-            // under the liquid.
-            cavityShade = LinearGradient(
-                0f, innerTop, 0f, innerBottom,
-                intArrayOf(
-                    ColorUtils.setAlphaComponent(Color.BLACK, 20),
-                    ColorUtils.setAlphaComponent(Color.BLACK, 0),
-                    ColorUtils.setAlphaComponent(Color.WHITE, 0),
-                    ColorUtils.setAlphaComponent(Color.WHITE, 12),
-                ),
-                floatArrayOf(0f, 0.30f, 0.72f, 1f), Shader.TileMode.CLAMP,
-            )
+        fun build(innerTop: Float, innerBottom: Float) {
             // Liquid (v0.3.6): anchored to the inner height, so whatever
             // part of it is visible reads light near the surface and deep
-            // at the bottom — depth, not a flat fill.
+            // at the bottom — depth, not a flat fill. This is the one
+            // gradient that survives the v0.3.21 flattening: it is how
+            // the level reads, not decoration. The shell, outline and
+            // bolt that used to be gradients here are flat colours now
+            // (the container role, the accent, boltFill).
             liquid = LinearGradient(
                 0f, innerTop, 0f, innerBottom,
                 intArrayOf(
@@ -678,28 +643,6 @@ class BatteryFaceView @JvmOverloads constructor(
                     ColorUtils.blendARGB(accent, Color.BLACK, 0.20f),
                 ),
                 floatArrayOf(0f, 0.35f, 0.72f, 1f), Shader.TileMode.CLAMP,
-            )
-            outline = LinearGradient(
-                0f, top, 0f, bottom,
-                intArrayOf(
-                    // Top stop lightened in v0.3.10 (0.30 -> 0.45): the
-                    // rim catches light from above like a glass edge.
-                    // The mid stop stays the pure state colour.
-                    ColorUtils.blendARGB(accent, Color.WHITE, 0.45f),
-                    accent,
-                    ColorUtils.blendARGB(accent, Color.BLACK, 0.22f),
-                ),
-                floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
-            )
-            aura = RadialGradient(
-                cx, cy, auraR,
-                intArrayOf(ColorUtils.setAlphaComponent(accent, 100), ColorUtils.setAlphaComponent(accent, 0)),
-                floatArrayOf(0f, 1f), Shader.TileMode.CLAMP,
-            )
-            bolt = LinearGradient(
-                0f, top, 0f, bottom,
-                intArrayOf(Color.WHITE, ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f), onAccent),
-                floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
             )
         }
     }
@@ -714,53 +657,36 @@ class BatteryFaceView @JvmOverloads constructor(
         FaceKind.UNKNOWN -> neutralPalette
     }
 
-    // ---- Paints (reused).
-    private val auraPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val glassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    // ---- Paints (reused). The decorative paints of the glass era
+    // (aura, shadow, gloss, rim, cavity shading, bolt glow, embers,
+    // crystal halo, sparkles) were removed in v0.3.21.
+    private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val cavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val liquidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val liquidEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
     private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val glossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.WHITE }
-    // Glass vessel (v0.3.10): interior depth shading + the specular rim.
-    private val cavityShadePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
-    }
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
     private val capPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val capLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; color = Color.WHITE
-    }
     private val boltFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val boltStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND
     }
-    private val boltGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val flamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val emberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val crystalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
-    private val crystalHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
-    }
-    private val sparklePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = Color.WHITE }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
     private val boltPath = Path()
     private val flamePath = Path()
     private val wavePath = Path()
     private val edgePath = Path()
-    private val sparklePath = Path()
     private val flakePath = Path()
     private val clipPath = Path()
-    private val glossPath = Path()
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -770,20 +696,17 @@ class BatteryFaceView @JvmOverloads constructor(
     private val bodyRect = RectF()
     private val innerRect = RectF()
     private val capRect = RectF()
-    private val shadowRect = RectF()
     private val layerRect = RectF()
-    private val rimRect = RectF() // scratch for the specular rim (v0.3.10)
     private var capShader: Shader? = null
-    private var shadowShader: Shader? = null
-    private var rimShader: Shader? = null // specular edge gradient (v0.3.10)
-    private var glossShader: Shader? = null // soft reflection band (v0.3.10)
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         // Upright battery (v0.3.6, user's instruction): width : height
         // ≈ 1 : 1.55, cap on TOP centre like a standing dry cell. Headroom
         // above the body is reserved for flames / flakes, with the cap in
-        // the middle of it; a ground shadow sits below. The rect itself
+        // the middle of it; an empty zone sits below (it held the ground
+        // shadow until v0.3.21 removed it; the zone stays in the
+        // geometry). The rect itself
         // comes from the shared bodyRectDp() (v0.3.19): the headroom and
         // shadow zones scale with the slot height, so a flexed-down slot
         // shrinks the whole composition proportionally instead of the
@@ -806,41 +729,14 @@ class BatteryFaceView @JvmOverloads constructor(
             bodyRect.centerX() - capW / 2f, top - capH + dp(2f),
             bodyRect.centerX() + capW / 2f, top + dp(2f),
         )
-        shadowRect.set(left + bodyW * 0.08f, bodyRect.bottom + dp(5f), left + bodyW * 0.92f, bodyRect.bottom + dp(16f))
         layerRect.set(0f, 0f, w.toFloat(), h.toFloat())
-        val cx = bodyRect.centerX(); val cy = bodyRect.centerY()
-        coolPalette.build(top, bodyRect.bottom, innerRect.top, innerRect.bottom, cx, cy, bodyH * 0.62f)
-        hotPalette.build(top, bodyRect.bottom, innerRect.top, innerRect.bottom, cx, cy, bodyH * 0.62f)
-        neutralPalette.build(top, bodyRect.bottom, innerRect.top, innerRect.bottom, cx, cy, bodyH * 0.62f)
+        coolPalette.build(innerRect.top, innerRect.bottom)
+        hotPalette.build(innerRect.top, innerRect.bottom)
+        neutralPalette.build(innerRect.top, innerRect.bottom)
         capShader = LinearGradient(
             capRect.left, 0f, capRect.right, 0f,
             intArrayOf(capDark, capMid, capLight, capMid, capDark),
             floatArrayOf(0f, 0.28f, 0.5f, 0.72f, 1f), Shader.TileMode.CLAMP,
-        )
-        shadowShader = RadialGradient(
-            shadowRect.centerX(), shadowRect.centerY(), shadowRect.width() / 2f,
-            intArrayOf(ColorUtils.setAlphaComponent(Color.BLACK, 46), ColorUtils.setAlphaComponent(Color.BLACK, 0)),
-            floatArrayOf(0f, 1f), Shader.TileMode.CLAMP,
-        )
-        // Specular rim (v0.3.10): the Simple Glass edge, with the
-        // skill's exact alphas — bright at the top (white 75% light /
-        // 38% dark), faint at the bottom (15% / 6%) — the same numbers
-        // GlassDrawable strokes every card and band with, so the face
-        // and the surfaces around it speak one glass language.
-        rimShader = LinearGradient(
-            0f, bodyRect.top, 0f, bodyRect.bottom,
-            ColorUtils.setAlphaComponent(Color.WHITE, if (nightMode) 97 else 191),
-            ColorUtils.setAlphaComponent(Color.WHITE, if (nightMode) 15 else 38),
-            Shader.TileMode.CLAMP,
-        )
-        // Reflection band (v0.3.10): a soft horizontal melt (white
-        // 36 -> 0) across the band's slant, replacing the hard-edged
-        // flat-alpha band — light on glass fades, it does not stop.
-        glossShader = LinearGradient(
-            bodyRect.left, 0f, bodyRect.left + bodyRect.width() * 0.24f, 0f,
-            ColorUtils.setAlphaComponent(Color.WHITE, 36),
-            ColorUtils.setAlphaComponent(Color.WHITE, 0),
-            Shader.TileMode.CLAMP,
         )
     }
 
@@ -916,7 +812,7 @@ class BatteryFaceView @JvmOverloads constructor(
                     duration = when (mode) {
                         0 -> 1500L // flames: lively
                         1 -> 2600L // charging pulse: slow
-                        else -> 6800L // cool face: one slow breath + sparkle twinkle
+                        else -> 6800L // cool face: one slow, quiet loop
                     }
                     repeatCount = ValueAnimator.INFINITE
                     interpolator = LinearInterpolator()
@@ -1144,35 +1040,8 @@ class BatteryFaceView @JvmOverloads constructor(
         val cy = bodyRect.centerY()
         val bodyTop = bodyRect.top
 
-        // Aura + ground shadow: the battery floats a little. On the cool
-        // face the aura breathes slowly (one breath per animator loop:
-        // sin(phase/2) runs 0→1→0 over the loop, so it never jumps).
-        auraPaint.shader = palette.aura
-        val scaleY = (bodyRect.height() / bodyRect.width()) * 0.80f
-        if (kind == FaceKind.SAVING) {
-            val breath = sin(phase * 0.5).toFloat() // 0..1..0 per loop
-            val r = bodyRect.width() * 0.92f * (0.97f + 0.05f * breath)
-            auraPaint.alpha = (215 + 40 * breath).toInt()
-            canvas.save()
-            canvas.translate(cx, cy)
-            canvas.scale(1f, scaleY)
-            canvas.translate(-cx, -cy)
-            canvas.drawCircle(cx, cy, r, auraPaint)
-            canvas.restore()
-        } else {
-            auraPaint.alpha = 255
-            canvas.save()
-            canvas.translate(cx, cy)
-            canvas.scale(1f, scaleY)
-            canvas.translate(-cx, -cy)
-            canvas.drawCircle(cx, cy, bodyRect.width() * 0.92f, auraPaint)
-            canvas.restore()
-        }
-        auraPaint.shader = null
-        auraPaint.alpha = 255
-        shadowPaint.shader = shadowShader
-        canvas.drawOval(shadowRect, shadowPaint)
-        shadowPaint.shader = null
+        // No aura and no ground shadow since v0.3.21: the battery
+        // stands on the flat surface, not floating over it.
 
         // Flames sit behind the body so their bases tuck behind its top
         // edge, standing up around the cap.
@@ -1256,21 +1125,16 @@ class BatteryFaceView @JvmOverloads constructor(
         // 22dp radius on a flexed-down body would round it into a pill.
         val radius = dp(22f) * maxOf(sizeScale, 0.5f)
         val innerRadius = dp(16f) * maxOf(sizeScale, 0.5f)
-        // Glass body.
-        glassPaint.shader = palette.glass
-        canvas.drawRoundRect(bodyRect, radius, radius, glassPaint)
-        glassPaint.shader = null
+        // Shell: the state container colour as an opaque solid
+        // (v0.3.21; it was a translucent glass gradient until
+        // v0.3.20).
+        shellPaint.color = palette.container
+        canvas.drawRoundRect(bodyRect, radius, radius, shellPaint)
 
         // Pale cavity: the unfilled part of the shell stays a visible
         // neutral surface in both themes, so the level can be read.
         cavityPaint.color = palette.cavity
         canvas.drawRoundRect(innerRect, innerRadius, innerRadius, cavityPaint)
-        // Interior depth shading (v0.3.10): the inside of the vessel —
-        // a whisper of shadow at the top inside edge, light at the
-        // floor. Over the cavity, under the liquid.
-        cavityShadePaint.shader = palette.cavityShade
-        canvas.drawRoundRect(innerRect, innerRadius, innerRadius, cavityShadePaint)
-        cavityShadePaint.shader = null
 
         // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
         // the BOTTOM by level. Its surface is a plane tilted by the
@@ -1331,60 +1195,20 @@ class BatteryFaceView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Glass gloss over the whole shell: one soft reflection band
-        // hugging the left edge, clipped to the body outline (kept
-        // quiet since v0.3.5 so it never fights the liquid). v0.3.10:
-        // the band's light now melts horizontally into the glass via
-        // a gradient shader, and the old flat top strip is gone — the
-        // specular rim below does that job in the shared glass
-        // language.
-        clipPath.reset()
-        clipPath.addRoundRect(bodyRect, radius, radius, Path.Direction.CW)
-        canvas.save()
-        canvas.clipPath(clipPath)
-        glossPaint.shader = glossShader
-        val bh = bodyRect.height()
-        glossPath.reset()
-        glossPath.moveTo(bodyRect.left, bodyRect.top - bh * 0.04f)
-        glossPath.lineTo(bodyRect.left + bodyRect.width() * 0.20f, bodyRect.top - bh * 0.04f)
-        glossPath.lineTo(bodyRect.left + bodyRect.width() * 0.13f, bodyRect.bottom + bh * 0.04f)
-        glossPath.lineTo(bodyRect.left, bodyRect.bottom + bh * 0.04f)
-        glossPath.close()
-        canvas.drawPath(glossPath, glossPaint)
-        glossPaint.shader = null
-        canvas.restore()
-
-        // Terminal cap on top centre: metal gradient + a highlight line
-        // down its middle. Drawn over the body's top edge so the two read
-        // as one piece.
+        // Terminal cap on top centre: metal gradient (kept — it is
+        // what makes the cap read as metal; its white highlight line
+        // was removed in v0.3.21). Drawn over the body's top edge so
+        // the two read as one piece.
         capPaint.shader = capShader
         canvas.drawRoundRect(capRect, dp(4f), dp(4f), capPaint)
         capPaint.shader = null
-        capLinePaint.alpha = 150
-        capLinePaint.strokeWidth = dp(1.2f)
-        canvas.drawLine(
-            capRect.centerX(), capRect.top + dp(2.5f),
-            capRect.centerX(), capRect.bottom - dp(1f), capLinePaint,
-        )
 
-        // Outline over everything, gradient-shaded.
-        outlinePaint.shader = palette.outline
+        // Outline over everything: the state colour as a solid
+        // stroke (v0.3.21; it was a lightened-top gradient until
+        // v0.3.20, and the specular rim that ran inside it is gone).
+        outlinePaint.color = palette.accent
         outlinePaint.strokeWidth = dp(4.5f) * maxOf(sizeScale, 0.55f)
         canvas.drawRoundRect(bodyRect, radius, radius, outlinePaint)
-        outlinePaint.shader = null
-
-        // Specular rim (v0.3.10): a 1dp stroke just inside the
-        // outline, bright at the top and faint at the bottom — the
-        // Simple Glass edge, in the same numbers as every GlassDrawable
-        // surface in the app. This is what makes the shell read as a
-        // glass vessel rather than a coloured frame.
-        rimPaint.shader = rimShader
-        rimPaint.strokeWidth = dp(1f)
-        val rimInset = dp(2.8f)
-        rimRect.set(bodyRect)
-        rimRect.inset(rimInset, rimInset)
-        canvas.drawRoundRect(rimRect, (radius - rimInset).coerceAtLeast(0f), (radius - rimInset).coerceAtLeast(0f), rimPaint)
-        rimPaint.shader = null
     }
 
     /**
@@ -1426,24 +1250,15 @@ class BatteryFaceView @JvmOverloads constructor(
         val cx = bodyRect.centerX()
         val cy = bodyRect.centerY()
         val bodyH = bodyRect.height()
-        // Soft pulsing glow behind the bolt (frozen mid-glow when still).
-        val pulse = 0.5f + 0.5f * sin(phase.toDouble()).toFloat()
-        boltGlowPaint.color = ColorUtils.setAlphaComponent(palette.accent, (30 + 40 * pulse).toInt())
-        canvas.drawCircle(cx, cy, bodyH * 0.20f + dp(4f) * pulse, boltGlowPaint)
+        // Flat fill + a darker edge (v0.3.21: the pulsing glow behind
+        // the bolt and the white edge highlight are removed; the fill
+        // is the single colour Palette.boltFill).
         buildBoltPath(cx, cy, bodyH)
-        boltFillPaint.shader = palette.bolt
+        boltFillPaint.color = palette.boltFill
         canvas.drawPath(boltPath, boltFillPaint)
-        boltFillPaint.shader = null
         boltStrokePaint.color = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.28f)
         boltStrokePaint.strokeWidth = dp(1.1f)
         canvas.drawPath(boltPath, boltStrokePaint)
-        // A whisper of light on the bolt's upper-left edge.
-        canvas.save()
-        canvas.translate(-dp(0.9f), -dp(0.9f))
-        boltStrokePaint.color = ColorUtils.setAlphaComponent(Color.WHITE, 110)
-        boltStrokePaint.strokeWidth = dp(0.8f)
-        canvas.drawPath(boltPath, boltStrokePaint)
-        canvas.restore()
     }
 
     private fun buildBoltPath(cx: Float, cy: Float, bodyH: Float) {
@@ -1460,7 +1275,7 @@ class BatteryFaceView @JvmOverloads constructor(
         boltPath.close()
     }
 
-    // ---------------- Cool face: snowflakes + sparkles ----------------
+    // ---------------- Cool face: snowflakes ----------------
 
     private fun drawCrystals(canvas: Canvas, color: Int) {
         val l = bodyRect.left; val t = bodyRect.top
@@ -1469,14 +1284,15 @@ class BatteryFaceView @JvmOverloads constructor(
         // body-relative already, so the composition is unchanged.
         val cs = maxOf(sizeScale, 0.55f)
         // Balanced around the upright body — beside the cap, down both
-        // sides, two faint inside the glass — never bunched on top:
+        // sides, two faint inside the shell — never bunched on top.
+        // (The twinkling sparkles that shared this space until
+        // v0.3.20 were pure decoration and are gone in v0.3.21.)
         snowflake(canvas, l - bw * 0.16f, t + bh * 0.02f, dp(13f) * cs, color, 235)
         snowflake(canvas, l + bw * 1.16f, t + bh * 0.02f, dp(11f) * cs, color, 235)
         snowflake(canvas, l - bw * 0.20f, t + bh * 0.42f, dp(8.5f) * cs, color, 200)
         snowflake(canvas, l + bw * 1.20f, t + bh * 0.55f, dp(7.5f) * cs, color, 200)
         snowflake(canvas, l + bw * 0.26f, t + bh * 0.22f, dp(7f) * cs, color, 110)
         snowflake(canvas, l + bw * 0.74f, t + bh * 0.68f, dp(6f) * cs, color, 110)
-        drawSparkles(canvas)
     }
 
     /** Six arms, two branch chevrons per arm, small ring at the centre. */
@@ -1500,50 +1316,19 @@ class BatteryFaceView @JvmOverloads constructor(
                 }
             }
         }
-        crystalHaloPaint.color = ColorUtils.setAlphaComponent(color, (46 * alpha / 255).coerceIn(0, 255))
-        crystalHaloPaint.strokeWidth = dp(3.4f)
-        canvas.drawPath(flakePath, crystalHaloPaint)
+        // Single pass since v0.3.21: the soft halo stroke that ran
+        // under the flake (a glow, not information) is removed.
         crystalPaint.color = ColorUtils.setAlphaComponent(color, alpha)
         crystalPaint.strokeWidth = dp(1.7f)
         canvas.drawPath(flakePath, crystalPaint)
         canvas.drawCircle(cx, cy, r * 0.16f, crystalPaint)
     }
 
-    private fun drawSparkles(canvas: Canvas) {
-        // Fixed spots around the body, deterministic twinkle offsets.
-        // Alpha only — no motion of position; stillness stays the lead.
-        val l = bodyRect.left; val t = bodyRect.top
-        val bw = bodyRect.width(); val bh = bodyRect.height()
-        val spots = arrayOf(
-            floatArrayOf(l - dp(14f), t + bh * 0.24f, 6.0f, 0.0f),
-            floatArrayOf(l + bw + dp(14f), t + bh * 0.30f, 5.0f, 2.1f),
-            floatArrayOf(l + bw * 0.5f, t - dp(24f), 4.2f, 4.0f),
-            floatArrayOf(l - dp(10f), t + bh * 0.72f, 5.2f, 1.2f),
-            floatArrayOf(l + bw + dp(10f), t + bh * 0.82f, 4.6f, 3.2f),
-        )
-        val cs = maxOf(sizeScale, 0.55f)
-        for ((cx, cy, rDp, off) in spots) {
-            val tw = 0.5f + 0.5f * sin(phase + off).toFloat()
-            sparklePaint.alpha = (40 + 120 * tw).toInt()
-            val r = dp(rDp) * cs * (0.85f + 0.15f * tw)
-            sparklePath.reset()
-            sparklePath.moveTo(cx, cy - r)
-            sparklePath.quadTo(cx, cy, cx + r, cy)
-            sparklePath.quadTo(cx, cy, cx, cy + r)
-            sparklePath.quadTo(cx, cy, cx - r, cy)
-            sparklePath.quadTo(cx, cy, cx, cy - r)
-            sparklePath.close()
-            canvas.drawPath(sparklePath, sparklePaint)
-        }
-        sparklePaint.alpha = 255
-    }
-
-    // ---------------- Hot face: layered flames + embers ----------------
+    // ---------------- Hot face: layered flames ----------------
 
     private fun drawFlames(canvas: Canvas, cx: Float, bodyTop: Float) {
         val baseY = bodyTop + dp(7f)
         val bw = bodyRect.width()
-        drawEmbers(canvas, cx, baseY)
         // Flames stand from the top of the upright body, around the cap:
         // five flames across the body's width on a centre-high envelope,
         // over a low wide bed. Heights are capped by the headroom above
@@ -1601,23 +1386,8 @@ class BatteryFaceView @JvmOverloads constructor(
         canvas.drawPath(flamePath, flamePaint)
     }
 
-    /** A fixed set of embers rising and fading; frozen mid-rise when still. */
-    private fun drawEmbers(canvas: Canvas, cx: Float, baseY: Float) {
-        val cycle = (phase / (2 * Math.PI)).toFloat()
-        val rise = min(dp(92f), (baseY - dp(4f)).coerceAtLeast(dp(24f)))
-        val spread = bodyRect.width() * 1.05f
-        for (i in 0 until EMBER_COUNT) {
-            val seed = EMBER_SEEDS[i]
-            val t = frac(cycle + seed)
-            val x = cx + (seed * 97f % 1f - 0.5f) * spread + sin(t * 5f + i * 1.7).toFloat() * dp(4f)
-            val y = baseY - dp(10f) - t * rise
-            val fade = sin(Math.PI * t).toFloat()
-            emberPaint.color = emberColor
-            emberPaint.alpha = (185 * fade).toInt().coerceIn(0, 255)
-            canvas.drawCircle(x, y, dp(0.9f) + dp(1.9f) * (1f - t), emberPaint)
-        }
-        emberPaint.alpha = 255
-    }
+    // The rising embers that used to float above the flames were
+    // removed in v0.3.21 (decoration; the flames carry the state).
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
@@ -1625,8 +1395,8 @@ class BatteryFaceView @JvmOverloads constructor(
         /**
          * The battery body's rect (dp) inside a slot of the given
          * size — the single source for the face's geometry (v0.3.19).
-         * onSizeChanged draws from it, and the home screen's glass
-         * plate mirrors it, so plate and face can never drift apart.
+         * onSizeChanged draws from it. (The home screen's glass plate
+         * mirrored it too until the plate was removed in v0.3.21.)
          * The headroom above the body (flames / cap) and the shadow
          * zone below scale with the slot height relative to the
          * full-size 320dp slot; at 320dp every value is exactly the
@@ -1653,11 +1423,6 @@ class BatteryFaceView @JvmOverloads constructor(
 
         // Snowflake branch positions along each arm: (fraction, length fraction) pairs.
         private val BRANCHES = floatArrayOf(0.52f, 0.34f, 0.78f, 0.24f)
-        private const val EMBER_COUNT = 12
-        // Deterministic per-ember offsets (golden-ratio-ish spread).
-        private val EMBER_SEEDS = floatArrayOf(
-            0.13f, 0.47f, 0.71f, 0.29f, 0.89f, 0.55f, 0.05f, 0.63f, 0.37f, 0.21f, 0.79f, 0.43f,
-        )
         // Bubble counts per state: hot / charging / saving.
         private val BUBBLE_COUNTS = intArrayOf(8, 7, 3)
         private val BUBBLE_SEEDS = floatArrayOf(

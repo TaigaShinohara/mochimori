@@ -1,14 +1,12 @@
 package com.taigashinohara.mochimori
 
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.view.ContextThemeWrapper
@@ -34,6 +32,10 @@ import kotlin.math.sin
  *  - bubbles are a few fixed seeds inside the liquid.
  * State comes from [BatteryJudge] via the caller — this renderer never
  * judges anything itself.
+ *
+ * v0.3.21: the still follows the live face's M3 flattening — solid
+ * shell and outline, no aura, ground shadow, gloss, rim, cavity
+ * shading, bolt glow or flake halo (see BatteryFaceView's doc).
  */
 object WidgetFaceRenderer {
 
@@ -64,8 +66,6 @@ object WidgetFaceRenderer {
 
     private fun draw(canvas: Canvas, context: Context, kind: Kind, level: Int) {
         val themed = ContextThemeWrapper(context, R.style.Theme_MochiMori)
-        val night = (context.resources.configuration.uiMode and
-            Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
 
         fun attr(attrRes: Int, fallback: Int): Int =
             MaterialColors.getColor(themed, attrRes, fallback)
@@ -121,10 +121,6 @@ object WidgetFaceRenderer {
             body.centerX() - capW / 2f, body.top - capH + u(2f),
             body.centerX() + capW / 2f, body.top + u(2f),
         )
-        val shadow = RectF(
-            body.left + bodyW * 0.08f, body.bottom + u(5f),
-            body.left + bodyW * 0.92f, body.bottom + u(16f),
-        )
         val radius = u(22f)
         val innerRadius = u(16f)
 
@@ -133,32 +129,8 @@ object WidgetFaceRenderer {
             style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
         }
 
-        // ---- Aura + ground shadow ----
-        fill.shader = RadialGradient(
-            body.centerX(), body.centerY(), bodyH * 0.62f,
-            intArrayOf(
-                ColorUtils.setAlphaComponent(accent, 100),
-                ColorUtils.setAlphaComponent(accent, 0),
-            ),
-            floatArrayOf(0f, 1f), Shader.TileMode.CLAMP,
-        )
-        val scaleY = (body.height() / body.width()) * 0.80f
-        canvas.save()
-        canvas.translate(body.centerX(), body.centerY())
-        canvas.scale(1f, scaleY)
-        canvas.translate(-body.centerX(), -body.centerY())
-        canvas.drawCircle(body.centerX(), body.centerY(), body.width() * 0.92f, fill)
-        canvas.restore()
-        fill.shader = RadialGradient(
-            shadow.centerX(), shadow.centerY(), shadow.width() / 2f,
-            intArrayOf(
-                ColorUtils.setAlphaComponent(Color.BLACK, 46),
-                ColorUtils.setAlphaComponent(Color.BLACK, 0),
-            ),
-            floatArrayOf(0f, 1f), Shader.TileMode.CLAMP,
-        )
-        canvas.drawOval(shadow, fill)
-        fill.shader = null
+        // No aura and no ground shadow (removed in v0.3.21, with the
+        // live face).
 
         // ---- Flames behind the body (hot face, frozen at phase 0) ----
         if (kind == Kind.HOT) {
@@ -176,34 +148,13 @@ object WidgetFaceRenderer {
             flameFull(canvas, fill, body.centerX(), baseY, bodyW * 0.145f, fh(1.0f), 0f, hotOuter, hot, hotInner, hotCore)
         }
 
-        // ---- Glass body ----
-        fill.shader = LinearGradient(
-            0f, body.top, 0f, body.bottom,
-            intArrayOf(
-                ColorUtils.setAlphaComponent(ColorUtils.blendARGB(container, Color.WHITE, 0.50f), 240),
-                ColorUtils.setAlphaComponent(container, 230),
-                ColorUtils.setAlphaComponent(ColorUtils.blendARGB(container, accent, 0.15f), 220),
-            ),
-            floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
-        )
+        // ---- Body: the container colour as an opaque solid (v0.3.21) ----
+        fill.color = container
         canvas.drawRoundRect(body, radius, radius, fill)
-        fill.shader = null
 
         // Cavity (the unfilled part stays a visible neutral surface).
         fill.color = cavity
         canvas.drawRoundRect(inner, innerRadius, innerRadius, fill)
-        fill.shader = LinearGradient(
-            0f, inner.top, 0f, inner.bottom,
-            intArrayOf(
-                ColorUtils.setAlphaComponent(Color.BLACK, 20),
-                ColorUtils.setAlphaComponent(Color.BLACK, 0),
-                ColorUtils.setAlphaComponent(Color.WHITE, 0),
-                ColorUtils.setAlphaComponent(Color.WHITE, 12),
-            ),
-            floatArrayOf(0f, 0.30f, 0.72f, 1f), Shader.TileMode.CLAMP,
-        )
-        canvas.drawRoundRect(inner, innerRadius, innerRadius, fill)
-        fill.shader = null
 
         // ---- Liquid: fills from the bottom, one still gentle wave ----
         val fillH = inner.height() * (level / 100f)
@@ -284,28 +235,7 @@ object WidgetFaceRenderer {
             canvas.restore()
         }
 
-        // ---- Gloss band (soft melt, left edge) ----
-        val glossClip = Path().apply { addRoundRect(body, radius, radius, Path.Direction.CW) }
-        canvas.save()
-        canvas.clipPath(glossClip)
-        fill.shader = LinearGradient(
-            body.left, 0f, body.left + body.width() * 0.24f, 0f,
-            ColorUtils.setAlphaComponent(Color.WHITE, 36),
-            ColorUtils.setAlphaComponent(Color.WHITE, 0),
-            Shader.TileMode.CLAMP,
-        )
-        val bh = body.height()
-        val gloss = Path()
-        gloss.moveTo(body.left, body.top - bh * 0.04f)
-        gloss.lineTo(body.left + body.width() * 0.20f, body.top - bh * 0.04f)
-        gloss.lineTo(body.left + body.width() * 0.13f, body.bottom + bh * 0.04f)
-        gloss.lineTo(body.left, body.bottom + bh * 0.04f)
-        gloss.close()
-        canvas.drawPath(gloss, fill)
-        fill.shader = null
-        canvas.restore()
-
-        // ---- Cap (metal) ----
+        // ---- Cap (metal gradient, kept as on the live face) ----
         val capLight = ColorUtils.blendARGB(neutral, Color.WHITE, 0.65f)
         val capMid = ColorUtils.blendARGB(neutral, Color.WHITE, 0.20f)
         val capDark = ColorUtils.blendARGB(neutral, Color.BLACK, 0.28f)
@@ -316,36 +246,11 @@ object WidgetFaceRenderer {
         )
         canvas.drawRoundRect(cap, u(4f), u(4f), fill)
         fill.shader = null
-        stroke.color = Color.WHITE
-        stroke.alpha = 150
-        stroke.strokeWidth = u(1.2f)
-        canvas.drawLine(cap.centerX(), cap.top + u(2.5f), cap.centerX(), cap.bottom - u(1f), stroke)
-        stroke.alpha = 255
 
-        // ---- Outline + specular rim ----
-        stroke.shader = LinearGradient(
-            0f, body.top, 0f, body.bottom,
-            intArrayOf(
-                ColorUtils.blendARGB(accent, Color.WHITE, 0.45f),
-                accent,
-                ColorUtils.blendARGB(accent, Color.BLACK, 0.22f),
-            ),
-            floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP,
-        )
+        // ---- Outline: the state colour as a solid stroke (v0.3.21) ----
+        stroke.color = accent
         stroke.strokeWidth = u(4.5f)
         canvas.drawRoundRect(body, radius, radius, stroke)
-        stroke.shader = null
-        stroke.shader = LinearGradient(
-            0f, body.top, 0f, body.bottom,
-            ColorUtils.setAlphaComponent(Color.WHITE, if (night) 97 else 191),
-            ColorUtils.setAlphaComponent(Color.WHITE, if (night) 15 else 38),
-            Shader.TileMode.CLAMP,
-        )
-        stroke.strokeWidth = 1f
-        val rim = RectF(body).apply { inset(u(2.8f), u(2.8f)) }
-        val rimRadius = (radius - u(2.8f)).coerceAtLeast(0f)
-        canvas.drawRoundRect(rim, rimRadius, rimRadius, stroke)
-        stroke.shader = null
 
         // ---- State marks ----
         when (kind) {
@@ -388,9 +293,7 @@ object WidgetFaceRenderer {
                 }
             }
         }
-        paint.color = ColorUtils.setAlphaComponent(color, (46 * alpha / 255).coerceIn(0, 255))
-        paint.strokeWidth = r * 0.26f
-        canvas.drawPath(path, paint)
+        // Single pass (the halo under-stroke was removed in v0.3.21).
         paint.color = ColorUtils.setAlphaComponent(color, alpha)
         paint.strokeWidth = r * 0.13f
         canvas.drawPath(path, paint)
@@ -404,8 +307,8 @@ object WidgetFaceRenderer {
     ) {
         val cx = body.centerX(); val cy = body.centerY()
         val bodyH = body.height()
-        fill.color = ColorUtils.setAlphaComponent(accent, 50)
-        canvas.drawCircle(cx, cy, bodyH * 0.20f, fill)
+        // Flat fill (v0.3.21: no glow circle, no gradient — the same
+        // single colour as the live face's boltFill).
         val boltH = bodyH * 0.36f
         val path = Path()
         path.moveTo(cx + u(4.5f), cy - boltH * 0.5f)
@@ -415,13 +318,8 @@ object WidgetFaceRenderer {
         path.lineTo(cx + u(9f), cy - u(3.5f))
         path.lineTo(cx + u(1f), cy - u(3.5f))
         path.close()
-        fill.shader = LinearGradient(
-            0f, body.top, 0f, body.bottom,
-            intArrayOf(Color.WHITE, ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f), onAccent),
-            floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP,
-        )
+        fill.color = ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f)
         canvas.drawPath(path, fill)
-        fill.shader = null
         stroke.color = ColorUtils.blendARGB(accent, Color.BLACK, 0.28f)
         stroke.strokeWidth = u(1.1f)
         canvas.drawPath(path, stroke)

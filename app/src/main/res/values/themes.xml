@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  MochiMori M3 theme (v0.3.0).
+  MochiMori M3 theme (v0.3.0; shape scale corrected to the M3 scale in
+  v0.3.21).
   Base: Theme.Material3.DayNight (system dark-theme following; the v0.2.0
   Light lock is removed). All colour comes from the semantic tokens in
-  colors.xml (light) / values-night/colors.xml (dark). On Android 12+,
-  Dynamic Colors are applied on top of this theme by MochiApp for the
-  standard M3 roles only; the custom state roles below are not overridden.
+  colors.xml (light) / values-night/colors.xml (dark). Dynamic Color is
+  NOT applied anywhere (v0.3.9 decision, kept in v0.3.21 as a deliberate
+  departure from the M3 default — see docs/M3_REVIEW_v0.3.20.md §4):
+  the palette is fixed so the app reads the same on every device.
 
   Type scale and component defaults (button shapes, switch, navigation bar
   indicator, text appearances) come from the Material3 theme itself; the
-  shape appearances below pin the project's shape tokens.
+  shape appearances below pin the project's shape tokens to the M3 shape
+  scale (extraSmall 4 / small 8 / medium 12 / large 16 / extraLarge 28).
 -->
 <resources>
 
@@ -25,7 +28,7 @@
         <item name="cornerSize">12dp</item>
     </style>
     <style name="ShapeAppearance.Mochi.Large" parent="ShapeAppearance.Material3.Corner.Large">
-        <item name="cornerSize">20dp</item>
+        <item name="cornerSize">16dp</item>
     </style>
     <style name="ShapeAppearance.Mochi.ExtraLarge" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
         <item name="cornerSize">28dp</item>

@@ -8,10 +8,6 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.RippleDrawable
-import android.graphics.drawable.ShapeDrawable
-import android.graphics.drawable.shapes.OvalShape
-import android.graphics.drawable.shapes.RoundRectShape
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Uri
@@ -32,7 +28,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.graphics.ColorUtils
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -53,7 +48,7 @@ import kotlin.math.roundToLong
  *   cool/ charging -> colorMochiStateCool family
  *   not saving     -> colorMochiWarning family (custom warning role)
  *   emergency      -> colorError family
- *   structure      -> colorTertiary / surface roles
+ *   structure      -> surface roles (uncoloured since v0.3.21)
  * All judgement and behaviour is unchanged from v0.2.0.
  * v0.3.1: design-consistency pass only (spacing rhythm tokens, type-token
  * compliance, onboarding heading hierarchy, state-colour discipline) — see
@@ -224,6 +219,29 @@ import kotlin.math.roundToLong
  * BatteryFaceView.bodyRectDp, which the glass plate mirrors from
  * the same function). The rules screen keeps its scroll, as does
  * onboarding.
+ * v0.3.21: M3 standardisation pass, at the user's instruction
+ * ("Material Design スキルで全体を見直して。Androidデフォルトであり
+ * そうな画面レイアウトに。ノイズと無駄な装飾を消して"); the audit
+ * is docs/M3_REVIEW_v0.3.20.md. The Simple Glass art direction
+ * (v0.3.8–v0.3.20) is retired: the gradient-and-light foundation
+ * (AppBackgroundDrawable) and every glass surface (GlassDrawable)
+ * are deleted, the ground is the flat surface role, cards are
+ * standard filled cards (surfaceContainer, Medium 12dp corners),
+ * the toolbar and navigation bar use their component defaults,
+ * and the decorative plate behind the face is gone. Headings lose
+ * their tertiary tint (onSurface; colour is for state and actions
+ * only), the numbers toggle is a standard Text Button instead of
+ * the glass chip, the checklist's glyph marks and "⌄" chevron
+ * become Material vector icons, checklist rows return to the 48dp
+ * touch target (the accordion's internal scroll absorbs the
+ * height, so the no-scroll default state is unaffected), and the
+ * rules stages become rows in one card with state-colour dots.
+ * The face keeps its liquid, flames, crystals, bolt and tilt —
+ * only its decorative layer (aura, sparkles, embers, gloss, rim,
+ * shading) is removed, inside BatteryFaceView. Dynamic Color stays
+ * OFF (the v0.3.9 real-device decision): a deliberate, documented
+ * departure from the M3 default. No function, judgement, item or
+ * permission changes.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -270,8 +288,7 @@ class MainActivity : AppCompatActivity() {
         // the fixed content leaves — no token bounds that size.
         // FACE_H_MAX is the drawing's design size (the v0.3.6
         // value): BatteryFaceView.bodyRectDp caps the body there
-        // and centres it in a taller slot, and the plate's initial
-        // estimate uses it. FACE_H_MIN is the fixed slot height of
+        // and centres it in a taller slot. FACE_H_MIN is the fixed slot height of
         // an expanded state (a checklist open, or the numbers fold
         // open), where the lower area needs the room instead. The
         // face's internal geometry — body proportions, flame/flake
@@ -281,44 +298,24 @@ class MainActivity : AppCompatActivity() {
         const val FACE_H_MAX = 320
         const val FACE_H_MIN = 136
 
-        // Checklist density (v0.3.19): the compact rhythm that lets
-        // both checklist cards live on one screen. Rows are 36dp
-        // dense rows (the type sizes are unchanged — item names stay
-        // BodyLarge, values BodyMedium); the card head's donut is
-        // 52dp; checklist cards pad 8dp vertically (rules cards keep
-        // CARD_PAD_V). See files/DESIGN.md §14 for the budget.
-        const val CHECK_ROW_H = 36
+        // Checklist rows (v0.3.19: 36dp dense rows so two always-open
+        // cards could fit; v0.3.21: back to the M3 standard 48dp
+        // touch target — since v0.3.20 the rows live behind the
+        // accordion head and the expanded state scrolls internally,
+        // so row height no longer decides whether the default state
+        // fits). The card head's donut is 52dp; checklist cards use
+        // the shared CARD_PAD_V like every other card.
+        const val CHECK_ROW_H = 48
         const val CHECK_DONUT = 52
-        const val CHECK_CARD_PAD_V = 8
-
-        // Glass plate behind the face (layout plan A, v0.3.11): the
-        // plate is the battery BODY's rect grown by these amounts —
-        // 24dp at the sides, 28dp above (it also covers the cap, which
-        // stands ~11dp proud of the body) and 16dp below (over the
-        // ground shadow's zone). Radius is the ExtraLarge shape token.
-        // The body's rect itself is BatteryFaceView.bodyRectDp; since
-        // v0.3.19 the plate is laid out from that same function (see
-        // layoutPlate) and the growth amounts scale with the slot, so
-        // plate and face stay one cluster at any slot height.
-        const val FACE_PLATE_PAD_H = 24
-        const val FACE_PLATE_TOP = 28
-        const val FACE_PLATE_BOTTOM = 16
-        const val FACE_PLATE_RADIUS = 28
     }
 
     private fun themeColor(attr: Int): Int = MaterialColors.getColor(this, attr, Color.BLACK)
-    private fun isNight(): Boolean =
-        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
     private val colorOnSurface get() = themeColor(com.google.android.material.R.attr.colorOnSurface)
     private val colorOnSurfaceVariant get() = themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant)
     private val colorPrimary get() = themeColor(com.google.android.material.R.attr.colorPrimary)
     private val colorSecondary get() = themeColor(com.google.android.material.R.attr.colorSecondary)
-    private val colorTertiary get() = themeColor(com.google.android.material.R.attr.colorTertiary)
     private val colorCool get() = themeColor(R.attr.colorMochiStateCool)
-    private val colorOnCool get() = themeColor(R.attr.colorOnMochiStateCool)
     private val colorWarning get() = themeColor(R.attr.colorMochiWarning)
-    private val colorOnWarning get() = themeColor(R.attr.colorOnMochiWarning)
     private val colorError get() = themeColor(com.google.android.material.R.attr.colorError)
     private val colorOnError get() = themeColor(com.google.android.material.R.attr.colorOnError)
 
@@ -338,36 +335,18 @@ class MainActivity : AppCompatActivity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Simple Glass foundation: one shared background for every
-            // screen — a quiet 3-stop gradient plus soft lights in the
-            // role colours' pale tints. The glass surfaces above it take
-            // their colour from this light showing through, never from
-            // paint on the surface itself.
-            // v0.3.9 (real-device screenshot: "見づらい"): the stops now
-            // stay inside ONE hue family (primary → secondary, both
-            // blue-navy) — the tertiary (purple) stop is gone from the
-            // foundation — Dynamic Color no longer tints anything (see
-            // MochiApp), and the lights themselves are much fainter
-            // (see AppBackgroundDrawable). Simple and calm by default.
-            background = AppBackgroundDrawable(
-                paper = themeColor(com.google.android.material.R.attr.colorSurface),
-                tintA = themeColor(com.google.android.material.R.attr.colorPrimaryContainer),
-                tintB = themeColor(com.google.android.material.R.attr.colorSecondaryContainer),
-                blobA = themeColor(com.google.android.material.R.attr.colorPrimaryContainer),
-                blobB = themeColor(com.google.android.material.R.attr.colorSecondaryContainer),
-                blobC = themeColor(com.google.android.material.R.attr.colorPrimaryContainer),
-                density = resources.displayMetrics.density,
-            )
+            // Flat surface ground (v0.3.21 M3 standardisation): the
+            // gradient-and-light foundation of the Simple Glass era
+            // (AppBackgroundDrawable, v0.3.8–v0.3.20) is retired —
+            // the standard Android ground is the surface role as a
+            // solid colour, and hierarchy comes from the container
+            // tones of the components on it.
+            setBackgroundColor(themeColor(com.google.android.material.R.attr.colorSurface))
         }
         toolbar = MaterialToolbar(this).apply {
             title = "もち守り"
-            // Overlap-weight band over the foundation (parts.md: top
-            // bar; thickened in v0.3.9 so text always reads — see
-            // GlassDrawable.band).
-            background = GlassDrawable.band(
-                themeColor(com.google.android.material.R.attr.colorSurface),
-                isNight(), dp(1).toFloat(),
-            )
+            // No custom background (v0.3.21): the Top App Bar keeps
+            // its component default container colour.
         }
         root.addView(toolbar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
@@ -380,34 +359,12 @@ class MainActivity : AppCompatActivity() {
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         bottomNav = com.google.android.material.bottomnavigation.BottomNavigationView(this).apply {
-            // Overlap-weight band (parts.md: tab bar; thickened in
-            // v0.3.9, see GlassDrawable.band). The floating pill
-            // form is deliberately NOT adopted: it is inseparable from
-            // the edge-to-edge inset handling, and changing the bar's
-            // shape without a real device to check it on risks the
-            // layout — recorded as 未適用 in the glass review.
-            background = GlassDrawable.band(
-                themeColor(com.google.android.material.R.attr.colorSurface),
-                isNight(), dp(1).toFloat(),
-            )
-            // v0.3.9: tab colours are set explicitly from the fixed
-            // roles. On the v0.3.8 screenshot the unselected labels all
-            // but vanished (translucent band + bright light behind +
-            // wallpaper-tinted theme); on the thickened band these
-            // pairs measure ~9:1 (dark) / ~7:1 (light) — see
-            // docs/GLASS_REVIEW_v0.3.8.md.
-            val navTint = android.content.res.ColorStateList(
-                arrayOf(
-                    intArrayOf(android.R.attr.state_checked),
-                    intArrayOf(),
-                ),
-                intArrayOf(colorPrimary, colorOnSurfaceVariant),
-            )
-            itemIconTintList = navTint
-            itemTextColor = navTint
-            itemActiveIndicatorColor = android.content.res.ColorStateList.valueOf(
-                themeColor(com.google.android.material.R.attr.colorSecondaryContainer),
-            )
+            // No custom background or tints (v0.3.21): the Navigation
+            // Bar keeps its component defaults — container colour,
+            // active indicator and label colours all come from the
+            // theme's roles, as in a stock Android app. (The v0.3.9
+            // explicit tints existed to survive the translucent glass
+            // band and its background light; both are gone.)
             inflateMenu(R.menu.bottom_nav)
             labelVisibilityMode = NavigationBarView.LABEL_VISIBILITY_LABELED
             setOnItemSelectedListener { item ->
@@ -544,22 +501,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * M3 Text Button (transparent container, 48dp target). The label
-     * colour is the secondary role (deep navy), not primary: the
-     * v0.3.10 glass audit's worst-case composite put primary #0277BD
-     * at ≈3.7:1 on the light foundation's lower tint — under the
-     * 4.5:1 gate — while secondary #46617A measures ≈5.0:1 there and
-     * keeps a blue, tappable read against the near-black body text.
-     * In the dark scheme both roles pass easily; secondary keeps the
-     * two schemes in the same language.
+     * M3 Text Button — the component's own text-button style, with
+     * no hand-set tint or label colour (v0.3.21 standardisation:
+     * until v0.3.20 this factory forced a transparent tint and a
+     * secondary label, a workaround for text sitting on the glass
+     * foundation's light; on the flat surface ground the theme
+     * default — primary label on a transparent container — is the
+     * standard and passes contrast in both schemes). The 48dp
+     * minimum height keeps the M3 touch target.
      */
     private fun textButton(text: String, action: () -> Unit): MaterialButton {
-        val b = MaterialButton(this).apply {
+        val b = MaterialButton(
+            android.view.ContextThemeWrapper(
+                this,
+                com.google.android.material.R.style.ThemeOverlay_Material3_Button_TextButton,
+            ),
+            null,
+            com.google.android.material.R.attr.materialButtonStyle,
+        ).apply {
             this.text = text
             isAllCaps = false
-            backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
-            setTextColor(colorSecondary)
-            strokeWidth = 0
             minimumHeight = dp(48) // M3 minimum touch target
             setOnClickListener { action() }
         }
@@ -570,61 +531,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Glass pill chip for the home screen's numbers toggle (layout
-     * plan A, v0.3.11): the flat text button becomes a small pill of
-     * reading glass (GlassDrawable.chip) with the same secondary
-     * label as the text buttons — the chip recipe's worst-case
-     * contrast is ≈5.8:1 (light) / ≈5.2:1 (dark), above the 4.5:1
-     * gate (see the factory's doc). No icon: the mock-up's bar-chart
-     * glyph has no existing part to reuse, and the label alone names
-     * what the chip does (audit M-2's rule). The press feedback is a
-     * ripple bounded by a pill mask over the glass; the touch target
-     * keeps the 48dp minimum. The fold behaviour is unchanged — this
-     * is the toggle's new clothes, not a new control. A plain
-     * TextView carries it so no button tint machinery can wash the
-     * glass out.
-     */
-    private fun glassChip(text: String, action: () -> Unit): TextView {
-        val radiusPx = dp(24).toFloat() // half the 48dp target height: a true pill
-        val glass = GlassDrawable.chip(
-            radiusPx, isNight(), dp(1).toFloat(),
-            themeColor(com.google.android.material.R.attr.colorSurface),
-        )
-        val mask = ShapeDrawable(RoundRectShape(FloatArray(8) { radiusPx }, null, null)).apply {
-            paint.color = Color.WHITE
-        }
-        val chip = TextView(this).apply {
-            this.text = text
-            setTextAppearance(taLabelLarge)
-            setTextColor(colorSecondary)
-            background = RippleDrawable(
-                ColorStateList.valueOf(ColorUtils.setAlphaComponent(colorSecondary, 48)),
-                glass,
-                mask,
-            )
-            gravity = Gravity.CENTER
-            minimumHeight = dp(48) // M3 minimum touch target, same as the text buttons
-            setPadding(dp(20), 0, dp(20), 0)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { action() }
-        }
-        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        lp.topMargin = dp(8)
-        chip.layoutParams = lp
-        return chip
-    }
-
-    /**
      * Small group heading inside the home numbers fold (v0.3.18,
-     * audit F-2): TitleSmall in the tertiary role — the art
-     * direction's structural colour for headings — centred like
-     * everything else in the home column. The fold's lines stay
-     * BodySmall; the heading is what tells the reader which of the
-     * fold's two kinds of information a line belongs to.
+     * audit F-2): TitleSmall, centred like everything else in the
+     * home column. The fold's lines stay BodySmall; the heading is
+     * what tells the reader which of the fold's two kinds of
+     * information a line belongs to. Its colour is onSurface since
+     * v0.3.21 (headings carried the tertiary tint until the M3
+     * standardisation; colour is now reserved for state and
+     * actions).
      */
     private fun foldHeading(text: String): TextView {
-        val tv = label(text, taTitleSmall, literalColor = colorTertiary)
+        val tv = label(text, taTitleSmall, literalColor = colorOnSurface)
         val lp = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         )
@@ -634,35 +551,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Card used only where a contained group is meaningful — since
-     * v0.3.8 a Simple Glass surface (see GlassDrawable): the neutral
-     * surface-container card becomes reading glass (white 62%→54%
-     * light / 19%→13% dark over the foundation's light), and the
-     * role-container cards (rules stages) become role-tint glass —
-     * the container colour kept nearly opaque with a gentle gradient,
-     * so state colours and on-container text contrast are unchanged.
-     * Both carry the 1dp specular edge. The card's own fill is
-     * transparent; the glass is a full-size child behind the content,
-     * which keeps MaterialCardView's shape/outline behaviour intact.
-     * Radius moves from Medium (12dp) to the Large token (20dp), the
-     * Simple Glass card band (20–28dp).
+     * Card used only where a contained group is meaningful — a
+     * standard M3 filled card (v0.3.21): the surfaceContainer role
+     * as an opaque fill and the Medium shape token (12dp), no
+     * elevation. Until v0.3.20 this factory dressed the card in
+     * Simple Glass (a translucent GlassDrawable child with a
+     * specular edge, 20dp corners); the M3 standardisation retired
+     * the glass, and the card is now the plain component.
      */
-    private fun card(bgAttr: Int): MaterialCardView = MaterialCardView(this).apply {
-        setCardBackgroundColor(ColorStateList.valueOf(Color.TRANSPARENT))
-        radius = dp(20).toFloat() // ShapeAppearance Large token (Simple Glass card band)
+    private fun card(): MaterialCardView = MaterialCardView(this).apply {
+        setCardBackgroundColor(
+            ColorStateList.valueOf(
+                themeColor(com.google.android.material.R.attr.colorSurfaceContainer),
+            ),
+        )
+        radius = dp(12).toFloat() // ShapeAppearance Medium token (M3 card standard)
         cardElevation = 0f
         useCompatPadding = false
-        val glass = View(this@MainActivity).apply {
-            background = if (bgAttr == com.google.android.material.R.attr.colorSurfaceContainer) {
-                GlassDrawable.reading(
-                    dp(20).toFloat(), isNight(), dp(1).toFloat(),
-                    themeColor(com.google.android.material.R.attr.colorSurface),
-                )
-            } else {
-                GlassDrawable.tint(themeColor(bgAttr), dp(20).toFloat(), isNight(), dp(1).toFloat())
-            }
-        }
-        addView(glass, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     private fun cardColumn(card: MaterialCardView, padH: Int = CARD_PAD_H, padV: Int = CARD_PAD_V): LinearLayout {
@@ -699,16 +604,16 @@ class MainActivity : AppCompatActivity() {
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         when (page) {
             0 -> {
-                col.addView(label("もち守り", taHeadline, literalColor = colorTertiary))
+                col.addView(label("もち守り", taHeadline, literalColor = colorOnSurface))
                 col.addView(label("何もしなくても、電池が持つ。", taBodyLarge, literalColor = colorOnSurface))
-                col.addView(label("自動でできること", taTitleMedium, literalColor = colorCool))
+                col.addView(label("自動でできること", taTitleMedium, literalColor = colorOnSurface))
                 col.addView(label("残量が減ったら、明るさと消灯時間を\n自動で下げます", taBodyLarge, literalColor = colorOnSurface))
                 col.addView(label("充電80%と発熱は、通知で知らせます", taBodyLarge, literalColor = colorOnSurface))
                 col.addView(progressDots(0))
                 col.addView(primaryButton("次へ") { showOnboarding(1) })
             }
             1 -> {
-                col.addView(label("正直な線引き", taTitleLarge, literalColor = colorTertiary))
+                col.addView(label("正直な線引き", taTitleLarge, literalColor = colorOnSurface))
                 col.addView(label("1タップでできること", taTitleMedium, literalColor = colorOnSurface))
                 col.addView(label("省電力モードはボタンから\n設定画面を開く", taBodyLarge, literalColor = colorOnSurface))
                 col.addView(label("できないこと", taTitleMedium, literalColor = colorOnSurface))
@@ -718,7 +623,7 @@ class MainActivity : AppCompatActivity() {
                 col.addView(primaryButton("次へ") { showOnboarding(2) })
             }
             else -> {
-                col.addView(label("許可のお願い", taTitleLarge, literalColor = colorTertiary))
+                col.addView(label("許可のお願い", taTitleLarge, literalColor = colorOnSurface))
                 col.addView(label("「設定の変更」許可があると、\n明るさと消灯時間を自動で調整できます", taBodyLarge, literalColor = colorOnSurface))
                 col.addView(label("許可しなくても、見るだけなら使えます", taBodySmall, literalColor = colorOnSurfaceVariant))
                 col.addView(progressDots(2))
@@ -740,9 +645,9 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Progress as a figure, not words: 3 dots, current page filled
-     * (R-10). Since the v0.3.8 design pass the current position is
-     * carried by shape AND the tertiary role colour (parts.md: dot
-     * indicator — current = role-colour solid, others = quiet dots);
+     * (R-10). The current position is carried by shape AND colour
+     * (the primary role since v0.3.21; it was the tertiary role
+     * until the M3 standardisation took colour off structure);
      * the spoken step count stays in the contentDescription.
      */
     private fun progressDots(page: Int): TextView {
@@ -750,7 +655,7 @@ class MainActivity : AppCompatActivity() {
         val span = android.text.SpannableString(text)
         val start = page * 2 // each dot + one separating space
         span.setSpan(
-            android.text.style.ForegroundColorSpan(colorTertiary),
+            android.text.style.ForegroundColorSpan(colorPrimary),
             start, start + 1,
             android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
         )
@@ -839,35 +744,22 @@ class MainActivity : AppCompatActivity() {
             // pulses live and die with the home tab.
             hapticsEnabled = prefs.getBoolean("haptics", true)
         }
-        // Layout plan A (v0.3.11): a thin decorative-glass plate behind
-        // the face, one size larger than the battery body, so face +
-        // plate read as a single cluster. The plate is a layout element
-        // only — BatteryFaceView's drawing is untouched. Since v0.3.19
-        // the slot height is variable, so the plate is laid out by
-        // layoutPlate() from BatteryFaceView.bodyRectDp — the same
-        // function the face draws from — first with a display-size
-        // estimate, then again by installPlateFit whenever the
-        // laid-out slot size changes.
-        val faceFrame = FrameLayout(this)
-        val plate = View(this)
-        faceFrame.addView(plate, FrameLayout.LayoutParams(0, 0))
-        faceFrame.addView(face, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        // The face stands on the flat surface alone (v0.3.21): the
+        // decorative glass plate that sat behind it (layout plan A,
+        // v0.3.11) was pure decoration and is removed, with its
+        // layout-tracking code — the slot mechanism below is
+        // unchanged.
         if (anyExpanded) {
             // Expanded state: the face yields its room to the lower
             // area and sits at the design floor.
-            col.addView(faceFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H_MIN)))
+            col.addView(face, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H_MIN)))
         } else {
             // Default state: the weighted trio (spacers 3:4 around
             // the face's 20) shares exactly the height the fixed
             // content leaves — the fit itself, with no measurement.
             col.addView(spacerTop, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 3f))
-            col.addView(faceFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 20f))
+            col.addView(face, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 20f))
         }
-        layoutPlate(
-            plate,
-            resources.displayMetrics.widthPixels / resources.displayMetrics.density - 2 * PAGE_PAD_H,
-            FACE_H_MAX.toFloat(),
-        )
 
         val (labelText, accent) = when (result.state) {
             BatteryJudge.State.SAVING -> "節電できてる" to colorCool
@@ -876,11 +768,11 @@ class MainActivity : AppCompatActivity() {
             BatteryJudge.State.UNKNOWN -> "確認中" to colorOnSurfaceVariant
             BatteryJudge.State.NOT_SAVING -> "節電できてない" to colorWarning
         }
-        // Layout plan A (v0.3.11): label + reason pull in tighter under
-        // the face so the three read as one block — the state label is
-        // pulled 8dp up into the face slot's empty shadow zone (the
-        // drawn shadow ends ~4dp above the slot's bottom edge, so
-        // nothing overlaps) and the label→reason gap closes to 4dp.
+        // Label + reason pull in tighter under the face so the three
+        // read as one block (layout plan A, v0.3.11) — the state
+        // label is pulled 8dp up into the face slot's empty bottom
+        // zone (the body's shadow zone in bodyRectDp; nothing is
+        // drawn there) and the label→reason gap closes to 4dp.
         // Both moves stay inside the spacing scale.
         val stateLabel = label(labelText, taHeadline, literalColor = accent)
         stateLabel.setPadding(0, dp(4), 0, 0)
@@ -1079,7 +971,7 @@ class MainActivity : AppCompatActivity() {
             BatteryHealth.estimatedFullCapacityMah(s.chargeCounterMicroAh, s.levelPercent)
                 ?.let { "満充電容量 約${"%,d".format(it)}mAh（推定）" },
         )
-        lowerCol.addView(glassChip(if (detailsOpen) "数値を閉じる" else "数値を見る") {
+        lowerCol.addView(textButton(if (detailsOpen) "数値を閉じる" else "数値を見る") {
             detailsOpen = !detailsOpen
             showScreen(0)
         })
@@ -1126,58 +1018,7 @@ class MainActivity : AppCompatActivity() {
             )
             col.addView(spacerBottom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
         }
-        installPlateFit(col, faceFrame, plate)
         return col
-    }
-
-    /**
-     * Lay out the glass plate behind the face (layout plan A,
-     * v0.3.11; variable slot since v0.3.19): the plate is the battery
-     * body's rect — from BatteryFaceView.bodyRectDp, the same
-     * function the face itself draws from — grown by the
-     * FACE_PLATE_* amounts, which scale with the slot so the plate
-     * never spills out of a flexed-down slot. The radius is
-     * regenerated with the scale for the same reason.
-     */
-    private fun layoutPlate(plate: View, slotWDp: Float, slotHDp: Float) {
-        val body = BatteryFaceView.bodyRectDp(slotWDp, slotHDp)
-        val ps = (slotHDp / FACE_H_MAX).coerceIn(0.45f, 1f)
-        val lp = FrameLayout.LayoutParams(
-            dp((body.width() + 2 * FACE_PLATE_PAD_H * ps).toInt()),
-            dp((body.height() + (FACE_PLATE_TOP + FACE_PLATE_BOTTOM) * ps).toInt()),
-            Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-        )
-        lp.topMargin = dp((body.top - FACE_PLATE_TOP * ps).toInt())
-        plate.layoutParams = lp
-        plate.background = GlassDrawable.decorative(
-            dp((FACE_PLATE_RADIUS * ps).toInt()).toFloat(), isNight(), dp(1).toFloat(),
-        )
-    }
-
-    /**
-     * Keep the glass plate glued to the face (layout plan A,
-     * v0.3.11): the plate's geometry derives from the face slot's
-     * real size via BatteryFaceView.bodyRectDp, and since v0.3.20
-     * the slot height comes from the layout weight (or the fixed
-     * FACE_H_MIN of an expanded state), so the plate is re-laid
-     * out whenever the laid-out slot size changes. Unlike the
-     * v0.3.19 fit this replaces, this listener NEVER touches
-     * heights — fitting is the weight's job, not a measurement's —
-     * it only mirrors the result into the plate, and stays
-     * registered for the view's lifetime (every state change
-     * rebuilds the screen and installs a fresh one). If it somehow
-     * never fired, the plate would keep its build-time estimate:
-     * a cosmetic offset, never an overflow.
-     */
-    private fun installPlateFit(col: LinearLayout, faceFrame: FrameLayout, plate: View) {
-        var lastSlotH = -1
-        col.viewTreeObserver.addOnGlobalLayoutListener {
-            if (faceFrame.width <= 0 || faceFrame.height <= 0) return@addOnGlobalLayoutListener
-            if (faceFrame.height == lastSlotH) return@addOnGlobalLayoutListener
-            lastSlotH = faceFrame.height
-            val density = resources.displayMetrics.density
-            layoutPlate(plate, faceFrame.width / density, faceFrame.height / density)
-        }
     }
 
     private fun openBatterySaverSettings() {
@@ -1400,9 +1241,8 @@ class MainActivity : AppCompatActivity() {
      * A checklist card (one per tier since v0.3.17): a head with the
      * donut chart and its big percent beside the title and the
      * one-line summary, then one tappable row per item. The surface
-     * is the shared card() reading glass — text sits on it, so it
-     * takes the thick, text-bearing recipe like every other reading
-     * surface. The percent is SavingChecklist.percent for THIS
+     * is the shared card() — a standard filled card since v0.3.21.
+     * The percent is SavingChecklist.percent for THIS
      * card's list only: judged items only, UNKNOWN rows out of the
      * denominator, and a dash in the middle when nothing could be
      * judged at all. The limit card is told apart from the normal
@@ -1422,6 +1262,9 @@ class MainActivity : AppCompatActivity() {
      * verdict, the state and the action — and the rows are built
      * only while [expanded]. The two cards open and close
      * independently; the v0.3.19 limit-mode swap is gone.
+     * v0.3.21: the chevron is the standard expand_more vector icon
+     * (it was a "⌄" text glyph), and the card padding is the
+     * shared CARD_PAD_V again.
      */
     private fun checklistCard(
         entries: List<SavingChecklist.Entry>,
@@ -1431,8 +1274,8 @@ class MainActivity : AppCompatActivity() {
         expanded: Boolean,
         onHeadTap: () -> Unit,
     ): MaterialCardView {
-        val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
-        val box = cardColumn(c, padV = CHECK_CARD_PAD_V)
+        val c = card()
+        val box = cardColumn(c)
         val percent = SavingChecklist.percent(entries)
         val summary = SavingChecklist.summary(entries)
 
@@ -1497,18 +1340,23 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         // The head is the card's open/close switch (v0.3.20, every
-        // card): the chevron — the same glyph the v0.3.19 swap used
-        // — rotates 180° while the rows are open, the whole head
-        // takes the selectable ripple, and its spoken description
-        // says the verdict, whether the rows are open, and what a
-        // tap does; the accessibility state description carries
-        // the open/closed state where the platform supports it.
-        val chevron = label(
-            "⌄", taTitleMedium,
-            literalColor = colorOnSurfaceVariant, center = false,
+        // card): the chevron rotates 180° while the rows are open,
+        // the whole head takes the selectable ripple, and its spoken
+        // description says the verdict, whether the rows are open,
+        // and what a tap does; the accessibility state description
+        // carries the open/closed state where the platform supports
+        // it. Since v0.3.21 the chevron is the standard expand_more
+        // vector icon (it was a "⌄" text glyph, whose shape depended
+        // on the font).
+        val chevron = android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_expand_more)
+            imageTintList = ColorStateList.valueOf(colorOnSurfaceVariant)
+            rotation = if (expanded) 180f else 0f
+        }
+        head.addView(
+            chevron,
+            LinearLayout.LayoutParams(dp(24), dp(24)),
         )
-        chevron.rotation = if (expanded) 180f else 0f
-        head.addView(chevron)
         val tv = TypedValue()
         if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
             head.setBackgroundResource(tv.resourceId)
@@ -1569,17 +1417,17 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * One checklist row: status mark + item name + measured value on
-     * a single line, with the theme's selectable ripple. Since
-     * v0.3.19 the row is a 36dp dense row (CHECK_ROW_H): with seven
-     * rows in the normal card and six in the limit card, 48dp (and
-     * even 40dp) rows make the two cards plus the face exceed every
-     * viewport in the 640–800dp band — the arithmetic is in
-     * files/DESIGN.md §14. The type sizes are unchanged (name
-     * BodyLarge, value BodyMedium), so nothing reads smaller; only
-     * the air between rows is gone. The value stays onSurfaceVariant
-     * in every state — body text never takes the warning colour
-     * (audit M-1); the mark carries the status, by shape as well
-     * as colour.
+     * a single line, with the theme's selectable ripple. The row was
+     * a 36dp dense row in v0.3.19–v0.3.20 (CHECK_ROW_H), a fit
+     * compromise from when both cards stood open at once — the
+     * arithmetic is in files/DESIGN.md §14. Since v0.3.21 the row is
+     * the standard 48dp again: the v0.3.20 accordion means rows only
+     * exist inside the internally-scrolling expanded state, so row
+     * height no longer trades against the default state's fit. The
+     * type sizes are unchanged (name BodyLarge, value BodyMedium).
+     * The value stays onSurfaceVariant in every state — body text
+     * never takes the warning colour (audit M-1); the mark carries
+     * the status, by shape as well as colour.
      */
     private fun checklistRow(entry: SavingChecklist.Entry): View {
         val row = LinearLayout(this).apply {
@@ -1629,47 +1477,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Status mark: a glyph in a small filled circle, distinguished by
-     * shape AND colour (✓ in the cool role, ！ in the warning role,
-     * ？ and i in the surface-variant role) so the meaning never rides
-     * on colour alone. The circle fill is the matching container colour
-     * and the glyph its role colour — large-symbol contrast in both
-     * schemes.
+     * Status mark: a standard Material filled icon, distinguished by
+     * shape AND colour (check_circle in the cool role, error in the
+     * warning role, help and info in the quiet onSurfaceVariant) so
+     * the meaning never rides on colour alone. Until v0.3.20 these
+     * were text glyphs (✓ ！ ？ i) on hand-drawn container-coloured
+     * circles; the v0.3.21 standardisation uses the stock icons, whose
+     * shapes do not depend on the font. The verdict also lives in
+     * words in the row's contentDescription.
      */
-    private fun checkMark(status: SavingChecklist.Status): TextView {
-        val (glyph, fill, fg) = when (status) {
-            SavingChecklist.Status.OK -> Triple(
-                "✓",
-                themeColor(R.attr.colorMochiStateCoolContainer),
-                colorCool,
-            )
-            SavingChecklist.Status.NG -> Triple(
-                "！",
-                themeColor(R.attr.colorMochiWarningContainer),
-                colorWarning,
-            )
-            SavingChecklist.Status.UNKNOWN -> Triple(
-                "？",
-                themeColor(com.google.android.material.R.attr.colorSurfaceVariant),
-                colorOnSurfaceVariant,
-            )
-            SavingChecklist.Status.INFO -> Triple(
-                // Advice, not a verdict: the same quiet surface as
-                // UNKNOWN, told apart by the glyph (i, not ？).
-                "i",
-                themeColor(com.google.android.material.R.attr.colorSurfaceVariant),
-                colorOnSurfaceVariant,
-            )
+    private fun checkMark(status: SavingChecklist.Status): View {
+        val (icon, tint) = when (status) {
+            SavingChecklist.Status.OK -> R.drawable.ic_check_circle to colorCool
+            SavingChecklist.Status.NG -> R.drawable.ic_error to colorWarning
+            SavingChecklist.Status.UNKNOWN -> R.drawable.ic_help to colorOnSurfaceVariant
+            SavingChecklist.Status.INFO -> R.drawable.ic_info to colorOnSurfaceVariant
         }
-        return TextView(this).apply {
-            text = glyph
-            setTextAppearance(taLabelLarge)
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(fg)
-            gravity = Gravity.CENTER
-            background = ShapeDrawable(OvalShape()).apply { paint.color = fill }
-            // 24dp since v0.3.19 (was 28): the mark scales with the
-            // dense row it sits in; the glyph's size is unchanged.
+        return android.widget.ImageView(this).apply {
+            setImageResource(icon)
+            imageTintList = ColorStateList.valueOf(tint)
             layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
         }
     }
@@ -1766,35 +1592,61 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(PAGE_PAD_H), dp(16), dp(PAGE_PAD_H), dp(16))
         }
-        col.addView(label("残量で自動で変わる", taTitleLarge, literalColor = colorTertiary, center = false))
+        col.addView(label("残量で自動で変わる", taTitleLarge, literalColor = colorOnSurface, center = false))
         // The "~15 min" note is no longer a permanent line here (audit R-8):
         // it is told once when auto-saving is turned ON (see switchRow).
-        // Each stage is one meaningful contained group -> one filled card,
-        // coloured by its state container role, text in the matching on* role.
+        // The three stages are ONE contained group (v0.3.21): a single
+        // standard card holding three rows — a state-colour dot, the
+        // stage title and its one-line detail — divided by hairlines.
+        // Until v0.3.20 each stage was its own card filled with its
+        // state container colour (the M3 anti-pattern of colouring
+        // whole surfaces by severity, and three saturated blocks of
+        // purple/orange/pink stacked on one screen); the state colour
+        // now lives in the dot alone, and all text is onSurface /
+        // onSurfaceVariant. See docs/M3_REVIEW_v0.3.20.md F-6.
         val stages = listOf(
-            StageUi(
-                "通常 31%〜", "何もしない・見守るだけ",
-                com.google.android.material.R.attr.colorPrimaryContainer,
-                com.google.android.material.R.attr.colorOnPrimaryContainer,
-            ),
-            StageUi(
-                "節電 30%以下", "定期チェックで 明るさ↓ ・ 消灯15秒（許可がある時）",
-                R.attr.colorMochiWarningContainer, R.attr.colorOnMochiWarningContainer,
-            ),
-            StageUi(
-                "緊急 15%以下", "省電力モードの1タップをホームに大きく出す",
-                com.google.android.material.R.attr.colorErrorContainer,
-                com.google.android.material.R.attr.colorOnErrorContainer,
-            ),
+            StageUi("通常 31%〜", "何もしない・見守るだけ", colorPrimary),
+            StageUi("節電 30%以下", "定期チェックで 明るさ↓ ・ 消灯15秒（許可がある時）", colorWarning),
+            StageUi("緊急 15%以下", "省電力モードの1タップをホームに大きく出す", colorError),
         )
-        stages.forEach { st ->
-            val c = card(st.containerAttr)
-            val box = cardColumn(c)
-            box.addView(label(st.title, taTitleMedium, literalColor = themeColor(st.onContainerAttr), center = false))
-            box.addView(label(st.detail, taBodySmall, literalColor = themeColor(st.onContainerAttr), center = false))
-            withTopMargin(c, CARD_GAP)
-            col.addView(c)
+        val stagesCard = card()
+        val stagesBox = cardColumn(stagesCard)
+        stages.forEachIndexed { i, st ->
+            if (i > 0) {
+                stagesBox.addView(
+                    View(this).apply {
+                        setBackgroundColor(
+                            themeColor(com.google.android.material.R.attr.colorOutlineVariant),
+                        )
+                    },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)),
+                )
+            }
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(12), 0, dp(12))
+            }
+            row.addView(
+                View(this).apply {
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL
+                        setColor(st.dotColor)
+                    }
+                },
+                LinearLayout.LayoutParams(dp(12), dp(12)),
+            )
+            val texts = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), 0, 0, 0)
+            }
+            texts.addView(label(st.title, taTitleMedium, literalColor = colorOnSurface, center = false))
+            texts.addView(label(st.detail, taBodySmall, literalColor = colorOnSurfaceVariant, center = false))
+            row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            stagesBox.addView(row)
         }
+        withTopMargin(stagesCard, CARD_GAP)
+        col.addView(stagesCard)
         // The auto-saving switch sits with its stage cards (v0.3.18,
         // audit F-5): it is the stages' master switch, not a peer of
         // the notification switches further down.
@@ -1841,14 +1693,14 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Group heading on the rules screen (v0.3.18, audit F-5):
-     * TitleMedium in the tertiary role — the catalog's 小見出し
-     * language, the same structural colour as this screen's
-     * TitleLarge page title — with one ACTION_GAP of air above it,
-     * so the switch column reads as named groups instead of one
-     * undifferentiated list.
+     * TitleMedium in onSurface (the tertiary tint it carried until
+     * v0.3.20 was retired by the M3 standardisation — headings are
+     * structure, and structure is not coloured), with one
+     * ACTION_GAP of air above it, so the switch column reads as
+     * named groups instead of one undifferentiated list.
      */
     private fun groupHeading(text: String): View {
-        val tv = label(text, taTitleMedium, literalColor = colorTertiary, center = false)
+        val tv = label(text, taTitleMedium, literalColor = colorOnSurface, center = false)
         val lp = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         )
@@ -1892,8 +1744,7 @@ class MainActivity : AppCompatActivity() {
     private data class StageUi(
         val title: String,
         val detail: String,
-        val containerAttr: Int,
-        val onContainerAttr: Int,
+        val dotColor: Int,
     )
 
     private fun switchRow(text: String, key: String, default: Boolean): View {
