@@ -25,5 +25,20 @@
         <receiver
             android:name=".BatteryCheckReceiver"
             android:exported="false" />
+        <!-- Home-screen widget (v0.3.12). APPWIDGET_UPDATE is a
+             system-sent broadcast, so exported=false is safe; no extra
+             permission is involved (no boot receiver — updates ride the
+             30-min system schedule and the app's own periodic check). -->
+        <receiver
+            android:name=".MochiWidgetProvider"
+            android:exported="false"
+            android:label="もち守り">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_mochi_info" />
+        </receiver>
     </application>
 </manifest>

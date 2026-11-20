@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Widget panel, LIGHT scheme (v0.3.12): the Simple Glass language
+  adapted to a launcher surface — a nearly opaque soft blue-white panel
+  (the widget floats over an unknown wallpaper, so it takes the
+  overlap-surface weight like the app bars do, not the thin reading
+  glass) with the specular edge: a 1dp stroke at white 75%, the skill's
+  light-scheme top-edge alpha. Corner radius is the Large token (20dp),
+  the same as the app's cards. The dark variant lives in
+  drawable-night/ with the deep-navy surface and white 38% edge.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="270"
+        android:startColor="#F2F7FAFC"
+        android:endColor="#E6E8F1F7" />
+    <corners android:radius="20dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#BFFFFFFF" />
+</shape>

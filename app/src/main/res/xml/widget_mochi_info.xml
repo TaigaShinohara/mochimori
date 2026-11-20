@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Widget metadata (v0.3.12).
+  - Minimum size 2x2 cells (110dp x 110dp by the platform's cell formula),
+    resizable in both directions.
+  - updatePeriodMillis 1800000 = 30 min, the platform minimum. The app's
+    own ~15 min periodic check also refreshes the widget (see
+    WidgetUpdater); there is no faster or instant update, by design and
+    by platform rule.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:initialLayout="@layout/widget_mochi"
+    android:previewLayout="@layout/widget_mochi"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen"
+    android:description="@string/widget_description" />

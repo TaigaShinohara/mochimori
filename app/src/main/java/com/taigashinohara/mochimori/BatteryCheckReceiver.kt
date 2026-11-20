@@ -25,6 +25,12 @@ class BatteryCheckReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val prefs = context.getSharedPreferences("rules", Context.MODE_PRIVATE)
         val snap = BatterySnapshot.read(context)
+        // Home-screen widget (v0.3.12): this check is one of the widget's
+        // two update moments (the other is the system's 30-min widget
+        // schedule). Runs even when the level is unknown — the widget
+        // renders its own honest "確認中" face then. No-op when no
+        // widget is placed.
+        WidgetUpdater.updateAll(context)
         if (!snap.levelKnown) return
 
         // --- Notifications (R2) ---
