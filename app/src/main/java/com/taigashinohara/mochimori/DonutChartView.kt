@@ -48,7 +48,7 @@ class DonutChartView @JvmOverloads constructor(
             invalidate()
         }
 
-    private val strokeWidthPx = 10f * resources.displayMetrics.density
+    private var strokeWidthPx = 10f * resources.displayMetrics.density
 
     private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -59,6 +59,22 @@ class DonutChartView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = strokeWidthPx
         strokeCap = Paint.Cap.ROUND
+    }
+
+    /**
+     * The ring's stroke scales with the view (v0.3.19): 10dp at the
+     * original 72dp size, thinner as the donut shrinks (the home
+     * checklist's compact head uses 52dp), so the hole the percent
+     * number sits in keeps its proportions instead of being eaten
+     * by a fixed-width ring.
+     */
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        val size = minOf(w, h)
+        if (size <= 0) return
+        strokeWidthPx = minOf(10f * resources.displayMetrics.density, size * 0.15f)
+        trackPaint.strokeWidth = strokeWidthPx
+        progressPaint.strokeWidth = strokeWidthPx
     }
 
     private val bounds = RectF()

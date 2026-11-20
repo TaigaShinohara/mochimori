@@ -188,6 +188,25 @@ import kotlin.math.roundToLong
  * リスト / 許可 — and a permission group showing the
  * WRITE_SETTINGS state with the existing request flow as its
  * entrance (F-5, F-6).
+ * v0.3.19: the home screen fits without scrolling, at the user's
+ * instruction ("ホーム画面はスクロール無しでコンテンツが見れる
+ * ようにしたい"). The home column is no longer a ScrollView: after
+ * layout, the fixed content's real heights are measured and the
+ * face slot takes whatever height is left (installHomeFit),
+ * clamped to [FACE_H_ABS_MIN, FACE_H_MAX] with FACE_H_MIN as the
+ * design floor — the face, never the cards or the actions, absorbs
+ * the difference, and BatteryFaceView's geometry scales to the
+ * slot (its body rect is the shared BatteryFaceView.bodyRectDp,
+ * which the glass plate now mirrors from the same function). The
+ * checklist compacts to fit: 36dp dense rows (type sizes
+ * unchanged), a 52dp donut with a size-proportional stroke, 8dp
+ * card padding. In limit mode the two cards share one rows area —
+ * both heads (donut + percent + summary) always show, exactly one
+ * card's rows are open, tapping a head swaps — and the guide row
+ * lives only in OFF mode, where the limit card's absence is what
+ * it explains. The one allowed exception is the open numbers fold:
+ * the face drops to FACE_H_MIN and the fold scrolls internally.
+ * The rules screen keeps its scroll, as does onboarding.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -199,6 +218,9 @@ class MainActivity : AppCompatActivity() {
     private var snap: BatterySnapshot? = null
     private var currentScreen = 0
     private var detailsOpen = false
+    /** In limit mode, which checklist card shows its rows (v0.3.19):
+     *  true = the limit card (the mode's point, and the default). */
+    private var expandedLimitCard = true
     private var onboardingPage = 0
     private var syncingNav = false
 
@@ -222,20 +244,39 @@ class MainActivity : AppCompatActivity() {
         const val CARD_PAD_V = 12
         const val ACTION_GAP = 24
 
-        // Home face slot height (v0.3.7: tokenised; the value itself is
-        // unchanged from v0.3.6). The face's internal geometry — body
-        // proportions, flame/flake headroom, ground shadow — lives in
-        // BatteryFaceView; this token only fixes the slot it is given.
-        const val FACE_H = 320
+        // Home face slot height (v0.3.7: tokenised at 320; v0.3.19:
+        // variable). The slot flexes so the whole home screen fits
+        // without scrolling: FACE_H_MAX is the full-size slot (the
+        // v0.3.6 value), FACE_H_MIN the design floor the fit aims
+        // for, and FACE_H_ABS_MIN the hard floor that keeps every
+        // element on screen in the extreme corner (emergency action
+        // + limit mode + a 640dp viewport). The face's internal
+        // geometry — body proportions, flame/flake headroom, ground
+        // shadow — lives in BatteryFaceView.bodyRectDp and scales
+        // with the slot it is given.
+        const val FACE_H_MAX = 320
+        const val FACE_H_MIN = 136
+        const val FACE_H_ABS_MIN = 64
+
+        // Checklist density (v0.3.19): the compact rhythm that lets
+        // both checklist cards live on one screen. Rows are 36dp
+        // dense rows (the type sizes are unchanged — item names stay
+        // BodyLarge, values BodyMedium); the card head's donut is
+        // 52dp; checklist cards pad 8dp vertically (rules cards keep
+        // CARD_PAD_V). See files/DESIGN.md §14 for the budget.
+        const val CHECK_ROW_H = 36
+        const val CHECK_DONUT = 52
+        const val CHECK_CARD_PAD_V = 8
 
         // Glass plate behind the face (layout plan A, v0.3.11): the
         // plate is the battery BODY's rect grown by these amounts —
         // 24dp at the sides, 28dp above (it also covers the cap, which
         // stands ~11dp proud of the body) and 16dp below (over the
         // ground shadow's zone). Radius is the ExtraLarge shape token.
-        // The body's rect itself is BatteryFaceView's geometry; the
-        // plate mirrors its formula in buildHome() and never changes
-        // the face's own size (FACE_H above is untouched).
+        // The body's rect itself is BatteryFaceView.bodyRectDp; since
+        // v0.3.19 the plate is laid out from that same function (see
+        // layoutPlate) and the growth amounts scale with the slot, so
+        // plate and face stay one cluster at any slot height.
         const val FACE_PLATE_PAD_H = 24
         const val FACE_PLATE_TOP = 28
         const val FACE_PLATE_BOTTOM = 16
@@ -737,15 +778,16 @@ class MainActivity : AppCompatActivity() {
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(PAGE_PAD_H), dp(16), dp(PAGE_PAD_H), dp(16))
+            setPadding(dp(PAGE_PAD_H), dp(10), dp(PAGE_PAD_H), dp(10))
         }
-        // Distribute the cluster over the full viewport height: weighted
-        // spacers above and below absorb the slack, so the face no longer
-        // huddles in the top half with a dead lower half (v0.3.4). When the
-        // content outgrows the viewport the spacers collapse and it scrolls.
-        // Layout plan A (v0.3.11): the weights go 3:4 instead of 1:1, so
-        // the cluster rides a little higher, as in the chosen mock-up.
-        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 3f))
+        // No-scroll home (v0.3.19): this column is NOT wrapped in a
+        // ScrollView anymore. The weighted spacers that used to
+        // distribute the cluster (v0.3.4, weights 3:4 in v0.3.11) are
+        // gone — the face slot itself is the flexible element now.
+        // installHomeFit (called at the end of this builder) measures
+        // the fixed content after layout and gives the face whatever
+        // height is left, so face + label + reason + action + cards +
+        // chip always fit the viewport exactly.
         val face = BatteryFaceView(this).apply {
             saving = result.saving
             charging = result.state == BatteryJudge.State.CHARGING
@@ -759,42 +801,22 @@ class MainActivity : AppCompatActivity() {
         // Layout plan A (v0.3.11): a thin decorative-glass plate behind
         // the face, one size larger than the battery body, so face +
         // plate read as a single cluster. The plate is a layout element
-        // only — BatteryFaceView's drawing is untouched, and the face
-        // slot keeps its FACE_H height and full width. The body's rect
-        // is mirrored from BatteryFaceView.onSizeChanged (top zone
-        // 58dp, shadow zone 20dp, body height capped at 272dp, width =
-        // height / 1.55 capped at 60% of the slot, top biased 0.35 into
-        // the leftover height); the plate grows that rect by the
-        // FACE_PLATE_* tokens.
+        // only — BatteryFaceView's drawing is untouched. Since v0.3.19
+        // the slot height is variable, so the plate is laid out by
+        // layoutPlate() from BatteryFaceView.bodyRectDp — the same
+        // function the face draws from — first with a display-size
+        // estimate, then again by installHomeFit once the real slot
+        // size is known.
         val faceFrame = FrameLayout(this)
-        run {
-            val density = resources.displayMetrics.density
-            val slotWDp = resources.displayMetrics.widthPixels / density - 2 * PAGE_PAD_H
-            val availHDp = FACE_H - 58f - 20f
-            var bodyHDp = minOf(availHDp, 272f)
-            var bodyWDp = bodyHDp / 1.55f
-            val maxBodyWDp = slotWDp * 0.60f
-            if (bodyWDp > maxBodyWDp) {
-                bodyWDp = maxBodyWDp
-                bodyHDp = bodyWDp * 1.55f
-            }
-            val bodyTopDp = 58f + (availHDp - bodyHDp) * 0.35f
-            val plate = View(this).apply {
-                background = GlassDrawable.decorative(
-                    dp(FACE_PLATE_RADIUS).toFloat(), isNight(), dp(1).toFloat(),
-                )
-            }
-            faceFrame.addView(
-                plate,
-                FrameLayout.LayoutParams(
-                    dp((bodyWDp + 2 * FACE_PLATE_PAD_H).toInt()),
-                    dp((bodyHDp + FACE_PLATE_TOP + FACE_PLATE_BOTTOM).toInt()),
-                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
-                ).apply { topMargin = dp((bodyTopDp - FACE_PLATE_TOP).toInt()) },
-            )
-        }
+        val plate = View(this)
+        faceFrame.addView(plate, FrameLayout.LayoutParams(0, 0))
         faceFrame.addView(face, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        col.addView(faceFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H)))
+        col.addView(faceFrame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(FACE_H_MAX)))
+        layoutPlate(
+            plate,
+            resources.displayMetrics.widthPixels / resources.displayMetrics.density - 2 * PAGE_PAD_H,
+            FACE_H_MAX.toFloat(),
+        )
 
         val (labelText, accent) = when (result.state) {
             BatteryJudge.State.SAVING -> "節電できてる" to colorCool
@@ -819,7 +841,12 @@ class MainActivity : AppCompatActivity() {
         )
         // Reason: BodyLarge on onSurface. onSurfaceVariant at this size was
         // too dim to read on the dark theme (user screenshot, v0.3.4).
-        col.addView(label(result.reason, taBodyLarge, literalColor = colorOnSurface))
+        // Its bottom padding is dropped (v0.3.19 density): the gap to
+        // whatever follows is carried by that element's own top margin
+        // (the action button's ACTION_GAP, the card's CARD_GAP).
+        val reasonLabel = label(result.reason, taBodyLarge, literalColor = colorOnSurface)
+        reasonLabel.setPadding(0, dp(4), 0, 0)
+        col.addView(reasonLabel)
         // The rough estimate moved into the folded details (audit R-7): the
         // home surface is face + label + reason + action only.
 
@@ -893,11 +920,29 @@ class MainActivity : AppCompatActivity() {
         // that can change it (see onChecklistTap).
         val checklistInput = readChecklistInput(s)
         val limitMode = prefs.getBoolean("limit_mode", false)
+        // v0.3.19: in limit mode the two cards share one rows area —
+        // both heads (donut + percent + summary) stay visible and
+        // exactly one card shows its rows; tapping a head swaps
+        // which (expandedLimitCard, defaulting to the limit card:
+        // the mode's point). Two full lists plus the face cannot fit
+        // one screen at any density that keeps the rows tappable, so
+        // the second list's verdict stays on screen as its head and
+        // its rows are one tap away. The guide row also lives only
+        // in OFF mode: while the limit card is on screen, a row
+        // naming where its switch lives would repeat what the screen
+        // already shows (minimal-information rule: don't say the
+        // same thing twice).
         val checklist = checklistCard(
             SavingChecklist.evaluateNormal(checklistInput),
             title = "節電チェック",
             limitStyle = false,
-            footer = limitGuideRow(),
+            footer = if (limitMode) null else limitGuideRow(),
+            collapsed = limitMode && expandedLimitCard,
+            expandable = limitMode,
+            onHeadTap = {
+                expandedLimitCard = false
+                showScreen(0)
+            },
         )
         withTopMargin(checklist, CARD_GAP)
         col.addView(checklist)
@@ -907,6 +952,12 @@ class MainActivity : AppCompatActivity() {
                 title = "限界まで節電",
                 limitStyle = true,
                 footer = null,
+                collapsed = !expandedLimitCard,
+                expandable = true,
+                onHeadTap = {
+                    expandedLimitCard = true
+                    showScreen(0)
+                },
             )
             withTopMargin(limitCard, CARD_GAP)
             col.addView(limitCard)
@@ -960,6 +1011,7 @@ class MainActivity : AppCompatActivity() {
             detailsOpen = !detailsOpen
             showScreen(0)
         })
+        var detailsScroller: ScrollView? = null
         if (detailsOpen) {
             // Two headed groups (v0.3.18, audit F-2): the remaining
             // time and the battery's health in one group, the raw
@@ -970,22 +1022,105 @@ class MainActivity : AppCompatActivity() {
             // from the checklist above (audit F-4): the checklist
             // carries verdicts (✓/！ marks), the fold carries detail
             // values and outlook, and the headings say so.
+            // v0.3.19: the open fold is the one place the home screen
+            // may scroll — it lives in its own weight-1 ScrollView
+            // under the chip while the face sits at FACE_H_MIN (see
+            // installHomeFit). The default (closed) state never
+            // scrolls; that is what the user's instruction governs.
+            val foldCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+            }
             val timeAndHealth = listOfNotNull(remainingText).plus(healthLines)
             if (timeAndHealth.isNotEmpty()) {
-                col.addView(foldHeading("残り時間と健康状態"))
+                foldCol.addView(foldHeading("残り時間と健康状態"))
                 timeAndHealth.forEach { line ->
-                    col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
+                    foldCol.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
                 }
             }
-            col.addView(foldHeading("いまの数値"))
-            col.addView(label(numbersText, taBodySmall, literalColor = colorOnSurfaceVariant))
+            foldCol.addView(foldHeading("いまの数値"))
+            foldCol.addView(label(numbersText, taBodySmall, literalColor = colorOnSurfaceVariant))
+            val scroller = ScrollView(this).apply { addView(foldCol) }
+            detailsScroller = scroller
+            col.addView(
+                scroller,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+            )
         }
-        // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
-        col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
-        return ScrollView(this).apply {
-            isFillViewport = true
-            addView(col, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        installHomeFit(col, faceFrame, plate, detailsScroller)
+        return col
+    }
+
+    /**
+     * Lay out the glass plate behind the face (layout plan A,
+     * v0.3.11; variable slot since v0.3.19): the plate is the battery
+     * body's rect — from BatteryFaceView.bodyRectDp, the same
+     * function the face itself draws from — grown by the
+     * FACE_PLATE_* amounts, which scale with the slot so the plate
+     * never spills out of a flexed-down slot. The radius is
+     * regenerated with the scale for the same reason.
+     */
+    private fun layoutPlate(plate: View, slotWDp: Float, slotHDp: Float) {
+        val body = BatteryFaceView.bodyRectDp(slotWDp, slotHDp)
+        val ps = (slotHDp / FACE_H_MAX).coerceIn(0.45f, 1f)
+        val lp = FrameLayout.LayoutParams(
+            dp((body.width() + 2 * FACE_PLATE_PAD_H * ps).toInt()),
+            dp((body.height() + (FACE_PLATE_TOP + FACE_PLATE_BOTTOM) * ps).toInt()),
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+        )
+        lp.topMargin = dp((body.top - FACE_PLATE_TOP * ps).toInt())
+        plate.layoutParams = lp
+        plate.background = GlassDrawable.decorative(
+            dp((FACE_PLATE_RADIUS * ps).toInt()).toFloat(), isNight(), dp(1).toFloat(),
+        )
+    }
+
+    /**
+     * The no-scroll fit (v0.3.19): once the home column has been laid
+     * out, sum the REAL heights of everything except the face slot
+     * (and the open fold's scroller, which is weight-driven) and give
+     * the face whatever height is left, clamped to
+     * [FACE_H_ABS_MIN, FACE_H_MAX]. Measuring the laid-out children —
+     * rather than trusting type-scale arithmetic — is what makes the
+     * fit hold at any viewport height and any font scale: the face
+     * absorbs the difference, never the cards or the actions. With
+     * the fold open, the face is additionally capped at FACE_H_MIN
+     * and the fold takes the rest in its own scroller. The listener
+     * removes itself after the first valid pass; every state change
+     * rebuilds the screen and installs a fresh one.
+     */
+    private fun installHomeFit(
+        col: LinearLayout,
+        faceFrame: FrameLayout,
+        plate: View,
+        detailsScroller: ScrollView?,
+    ) {
+        val listener = object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+            override fun onGlobalLayout() {
+                if (col.height <= 0 || faceFrame.width <= 0) return
+                col.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                val available = col.height - col.paddingTop - col.paddingBottom
+                var fixed = 0
+                for (i in 0 until col.childCount) {
+                    val child = col.getChildAt(i)
+                    if (child === faceFrame || child === detailsScroller) continue
+                    val lp = child.layoutParams as? LinearLayout.LayoutParams ?: continue
+                    fixed += child.height + lp.topMargin + lp.bottomMargin
+                }
+                var faceH = available - fixed
+                if (detailsScroller != null) faceH = minOf(faceH, dp(FACE_H_MIN))
+                faceH = faceH.coerceIn(dp(FACE_H_ABS_MIN), dp(FACE_H_MAX))
+                val lp = faceFrame.layoutParams as LinearLayout.LayoutParams
+                if (lp.height != faceH) {
+                    lp.height = faceH
+                    faceFrame.layoutParams = lp
+                }
+                val density = resources.displayMetrics.density
+                layoutPlate(plate, faceFrame.width / density, faceH / density)
+                faceFrame.requestLayout()
+            }
         }
+        col.viewTreeObserver.addOnGlobalLayoutListener(listener)
     }
 
     private fun openBatterySaverSettings() {
@@ -1220,15 +1355,25 @@ class MainActivity : AppCompatActivity() {
      * when given, is appended under the rows (the normal card
      * carries the guide row to the rules screen there — the
      * limit-mode switch itself moved to rules alone in v0.3.18).
+     * v0.3.19 compacts the card (CHECK_* density tokens: 52dp
+     * donut, 8dp card padding, padding-free head texts) and adds
+     * the limit-mode collapsed form: with [collapsed] set, only
+     * the head is built — the card's verdict (donut + percent +
+     * summary) stays on screen while its rows yield the shared
+     * rows area to the other card; [expandable] makes the head
+     * itself the switch that swaps the two (see buildHome).
      */
     private fun checklistCard(
         entries: List<SavingChecklist.Entry>,
         title: String,
         limitStyle: Boolean,
         footer: View?,
+        collapsed: Boolean = false,
+        expandable: Boolean = false,
+        onHeadTap: (() -> Unit)? = null,
     ): MaterialCardView {
         val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
-        val box = cardColumn(c)
+        val box = cardColumn(c, padV = CHECK_CARD_PAD_V)
         val percent = SavingChecklist.percent(entries)
         val summary = SavingChecklist.summary(entries)
 
@@ -1236,7 +1381,7 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val donutSize = dp(72)
+        val donutSize = dp(CHECK_DONUT)
         val donutWrap = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(donutSize, donutSize)
             contentDescription =
@@ -1253,7 +1398,9 @@ class MainActivity : AppCompatActivity() {
         donutWrap.addView(
             TextView(this).apply {
                 text = percent?.let { "$it%" } ?: "―"
-                setTextAppearance(taTitleLarge)
+                // TitleMedium (bold) since v0.3.19: the donut is 52dp
+                // now, and TitleLarge's "100%" would graze the ring.
+                setTextAppearance(taTitleMedium)
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(colorOnSurface)
                 gravity = Gravity.CENTER
@@ -1268,22 +1415,51 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, 0, 0)
         }
-        headTexts.addView(
-            label(
-                title, taTitleMedium,
-                literalColor = if (limitStyle) colorWarning else colorOnSurface,
-                center = false,
-            ),
+        // The head texts carry no vertical padding of their own
+        // (v0.3.19 density): the card's padding and the donut set the
+        // head's rhythm, so the two lines sit at their type-scale
+        // heights (24 + 22) under the 52dp donut.
+        val titleLabel = label(
+            title, taTitleMedium,
+            literalColor = if (limitStyle) colorWarning else colorOnSurface,
+            center = false,
         )
-        headTexts.addView(
-            label(summary, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false),
+        titleLabel.setPadding(0, 0, 0, 0)
+        headTexts.addView(titleLabel)
+        val summaryLabel = label(
+            summary, taBodyMedium,
+            literalColor = colorOnSurfaceVariant, center = false,
         )
+        summaryLabel.setPadding(0, dp(2), 0, 0)
+        headTexts.addView(summaryLabel)
         head.addView(
             headTexts,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
+        if (expandable) {
+            // Limit mode only (v0.3.19): the head is the other card's
+            // rows-area switch, so it carries a chevron and a ripple,
+            // and its spoken name says what a tap does.
+            head.addView(
+                label(
+                    if (collapsed) "›" else "⌄", taTitleMedium,
+                    literalColor = colorOnSurfaceVariant, center = false,
+                ),
+            )
+            val tv = TypedValue()
+            if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                head.setBackgroundResource(tv.resourceId)
+            }
+            head.isClickable = true
+            head.isFocusable = true
+            head.contentDescription =
+                "$title、$summary。" + if (collapsed) "タップで項目を開く" else "タップで項目を閉じる"
+            head.setOnClickListener { onHeadTap?.invoke() }
+        }
         box.addView(head)
-        entries.forEach { box.addView(checklistRow(it)) }
+        if (!collapsed) {
+            entries.forEach { box.addView(checklistRow(it)) }
+        }
         if (footer != null) box.addView(footer)
         return c
     }
@@ -1304,8 +1480,8 @@ class MainActivity : AppCompatActivity() {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(48)
-            setPadding(dp(4), dp(8), dp(4), 0)
+            minimumHeight = dp(CHECK_ROW_H)
+            setPadding(dp(4), dp(4), dp(4), 0)
             val tv = TypedValue()
             if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
                 setBackgroundResource(tv.resourceId)
@@ -1326,17 +1502,24 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * One checklist row: status mark + item name + measured value on
-     * a single line, 48dp tall, with the theme's selectable ripple.
-     * The value stays onSurfaceVariant in every state — body text
-     * never takes the warning colour (audit M-1); the mark carries
-     * the status, by shape as well as colour.
+     * a single line, with the theme's selectable ripple. Since
+     * v0.3.19 the row is a 36dp dense row (CHECK_ROW_H): with seven
+     * rows in the normal card and six in the limit card, 48dp (and
+     * even 40dp) rows make the two cards plus the face exceed every
+     * viewport in the 640–800dp band — the arithmetic is in
+     * files/DESIGN.md §14. The type sizes are unchanged (name
+     * BodyLarge, value BodyMedium), so nothing reads smaller; only
+     * the air between rows is gone. The value stays onSurfaceVariant
+     * in every state — body text never takes the warning colour
+     * (audit M-1); the mark carries the status, by shape as well
+     * as colour.
      */
     private fun checklistRow(entry: SavingChecklist.Entry): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = dp(48)
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            minimumHeight = dp(CHECK_ROW_H)
+            setPadding(dp(4), dp(2), dp(4), dp(2))
         }
         row.addView(checkMark(entry.status))
         val name = label(entry.name, taBodyLarge, literalColor = colorOnSurface, center = false).apply {
@@ -1418,7 +1601,9 @@ class MainActivity : AppCompatActivity() {
             setTextColor(fg)
             gravity = Gravity.CENTER
             background = ShapeDrawable(OvalShape()).apply { paint.color = fill }
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            // 24dp since v0.3.19 (was 28): the mark scales with the
+            // dense row it sits in; the glyph's size is unchanged.
+            layoutParams = LinearLayout.LayoutParams(dp(24), dp(24))
         }
     }
 

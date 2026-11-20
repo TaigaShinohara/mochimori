@@ -86,6 +86,21 @@ import kotlin.math.tan
  *   and wobble, and respawns at the bottom when it reaches the
  *   surface — no more lock-step deterministic cycle.
  *
+ * v0.3.19 variable size (user: "ホーム画面はスクロール無しでコンテンツ
+ * が見れるようにしたい"): the home slot is no longer a fixed 320dp —
+ * it flexes between a floor and 320dp so the whole home screen fits
+ * without scrolling, and this view's geometry follows the slot it is
+ * given. The body's rect comes from the shared bodyRectDp() formula
+ * (the home screen's glass plate mirrors the same function, so the
+ * two can never drift apart): the flame/cap headroom and the shadow
+ * zone scale with the slot height instead of staying at their 320dp
+ * values, and the decorative sizes that were tuned at full size
+ * (cap height, shell inset and radii, outline and meniscus strokes,
+ * crystal and sparkle radii, wave amplitudes) scale by sizeScale so
+ * a small face is the same face, smaller — never a clipped or
+ * squashed one. At a 320dp slot every number reduces to exactly the
+ * pre-v0.3.19 geometry.
+ *
  * v0.3.10 glass vessel (user: "UIアートはシンプルガラスにしよう" —
  * audit docs/GLASS_REVIEW_v0.3.9.md): until now the shell was an
  * OPAQUE tint (a coloured-plastic read) and this face was audited but
@@ -373,15 +388,18 @@ class BatteryFaceView @JvmOverloads constructor(
      * ampR, kf1, kf2, wavePhase].
      */
     private fun computeWave(kind: FaceKind): FloatArray {
+        // Wave amplitudes scale with the face (v0.3.19): at a small
+        // slot the full-size waves would fill the whole liquid column.
+        val ampScale = maxOf(sizeScale, 0.65f)
         val baseAmp = when (kind) {
             FaceKind.HOT -> dp(2.1f)
             FaceKind.CHARGING -> dp(1.5f)
             FaceKind.SAVING -> dp(1.1f)
             FaceKind.UNKNOWN -> 0f
-        }
-        val boost = min(dp(3.5f) * sloshEnergy, dp(5.5f))
+        } * ampScale
+        val boost = min(dp(3.5f) * sloshEnergy, dp(5.5f)) * ampScale
         val splash = splashLevel()
-        val amp1 = baseAmp + boost + dp(5.0f) * splash
+        val amp1 = baseAmp + boost + dp(5.0f) * splash * ampScale
         val waveSpeed = when (kind) {
             FaceKind.HOT -> 2.0f
             FaceKind.CHARGING -> 1.2f
@@ -393,8 +411,8 @@ class BatteryFaceView @JvmOverloads constructor(
             tan(sloshAngle.toDouble()).toFloat(),
             amp1,
             amp1 * 0.45f,
-            dp(0.55f) + dp(0.8f) * splash,
-            dp(3.2f) * splash,
+            (dp(0.55f) + dp(0.8f) * splash) * ampScale,
+            dp(3.2f) * splash * ampScale,
             (2 * Math.PI / (innerW * 0.9f)).toFloat(),
             (2 * Math.PI / (innerW * 0.45f)).toFloat(),
             phase * waveSpeed,
@@ -472,7 +490,7 @@ class BatteryFaceView @JvmOverloads constructor(
                 rippleF[i] = -RIPPLE_K * rippleY[i] - RIPPLE_C * rippleV[i] +
                     RIPPLE_COUPLE * (l + r - 2f * rippleY[i])
             }
-            val maxRipple = dp(9f)
+            val maxRipple = dp(9f) * maxOf(sizeScale, 0.6f)
             for (i in 0..SURFACE_STEPS) {
                 rippleV[i] += rippleF[i] * h
                 rippleY[i] = (rippleY[i] + rippleV[i] * h).coerceIn(-maxRipple, maxRipple)
@@ -745,6 +763,10 @@ class BatteryFaceView @JvmOverloads constructor(
     private val glossPath = Path()
 
     // ---- Geometry cached in onSizeChanged.
+    /** Slot height relative to the full-size 320dp slot (v0.3.19):
+     *  1 at 320dp and above, shrinking with the slot; decorative
+     *  sizes scale by it so the face keeps its proportions. */
+    private var sizeScale = 1f
     private val bodyRect = RectF()
     private val innerRect = RectF()
     private val capRect = RectF()
@@ -761,27 +783,25 @@ class BatteryFaceView @JvmOverloads constructor(
         // Upright battery (v0.3.6, user's instruction): width : height
         // ≈ 1 : 1.55, cap on TOP centre like a standing dry cell. Headroom
         // above the body is reserved for flames / flakes, with the cap in
-        // the middle of it; a ground shadow sits below.
-        val topZone = dp(58f) // flames + cap zone
-        val bottomZone = dp(20f) // ground shadow
-        val availH = (h - topZone - bottomZone).coerceAtLeast(dp(120f))
-        var bodyH = min(availH, dp(272f))
-        var bodyW = bodyH / 1.55f
-        val maxBodyW = w * 0.60f
-        if (bodyW > maxBodyW) {
-            bodyW = maxBodyW
-            bodyH = bodyW * 1.55f
-        }
-        val left = (w - bodyW) / 2f
-        val top = topZone + (availH - bodyH) * 0.35f
+        // the middle of it; a ground shadow sits below. The rect itself
+        // comes from the shared bodyRectDp() (v0.3.19): the headroom and
+        // shadow zones scale with the slot height, so a flexed-down slot
+        // shrinks the whole composition proportionally instead of the
+        // zones eating the body.
+        val bodyDp = bodyRectDp(w / density, h / density)
+        sizeScale = (h / density / 320f).coerceIn(0.45f, 1f)
+        val left = bodyDp.left * density
+        val top = bodyDp.top * density
+        val bodyW = bodyDp.width() * density
+        val bodyH = bodyDp.height() * density
         bodyRect.set(left, top, left + bodyW, top + bodyH)
-        val inset = dp(7f)
+        val inset = dp(7f) * maxOf(sizeScale, 0.5f)
         innerRect.set(left + inset, top + inset, left + bodyW - inset, top + bodyH - inset)
         // Cap: centred on the top edge, overlapping it slightly so it reads
         // as one piece with the body. Metal, sized in proportion (~44% of
-        // the body width, 13dp tall).
+        // the body width, 13dp tall at full size, scaled down with the face).
         val capW = bodyW * 0.44f
-        val capH = dp(13f)
+        val capH = dp(13f) * maxOf(sizeScale, 0.5f)
         capRect.set(
             bodyRect.centerX() - capW / 2f, top - capH + dp(2f),
             bodyRect.centerX() + capW / 2f, top + dp(2f),
@@ -1232,7 +1252,10 @@ class BatteryFaceView @JvmOverloads constructor(
     }
 
     private fun drawBody(canvas: Canvas, palette: Palette, kind: FaceKind) {
-        val radius = dp(22f)
+        // Corner radii scale with the face (v0.3.19): the full-size
+        // 22dp radius on a flexed-down body would round it into a pill.
+        val radius = dp(22f) * maxOf(sizeScale, 0.5f)
+        val innerRadius = dp(16f) * maxOf(sizeScale, 0.5f)
         // Glass body.
         glassPaint.shader = palette.glass
         canvas.drawRoundRect(bodyRect, radius, radius, glassPaint)
@@ -1241,12 +1264,12 @@ class BatteryFaceView @JvmOverloads constructor(
         // Pale cavity: the unfilled part of the shell stays a visible
         // neutral surface in both themes, so the level can be read.
         cavityPaint.color = palette.cavity
-        canvas.drawRoundRect(innerRect, dp(16f), dp(16f), cavityPaint)
+        canvas.drawRoundRect(innerRect, innerRadius, innerRadius, cavityPaint)
         // Interior depth shading (v0.3.10): the inside of the vessel —
         // a whisper of shadow at the top inside edge, light at the
         // floor. Over the cavity, under the liquid.
         cavityShadePaint.shader = palette.cavityShade
-        canvas.drawRoundRect(innerRect, dp(16f), dp(16f), cavityShadePaint)
+        canvas.drawRoundRect(innerRect, innerRadius, innerRadius, cavityShadePaint)
         cavityShadePaint.shader = null
 
         // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
@@ -1257,7 +1280,7 @@ class BatteryFaceView @JvmOverloads constructor(
         val fillH = innerRect.height() * (levelPercent / 100f)
         if (fillH > 0.5f) {
             clipPath.reset()
-            clipPath.addRoundRect(innerRect, dp(16f), dp(16f), Path.Direction.CW)
+            clipPath.addRoundRect(innerRect, innerRadius, innerRadius, Path.Direction.CW)
             canvas.save()
             canvas.clipPath(clipPath)
             // Wave parameters are shared with the particle physics
@@ -1303,7 +1326,7 @@ class BatteryFaceView @JvmOverloads constructor(
             // inside the shell.
             liquidEdgePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.65f)
             liquidEdgePaint.alpha = 235
-            liquidEdgePaint.strokeWidth = dp(2.3f)
+            liquidEdgePaint.strokeWidth = dp(2.3f) * maxOf(sizeScale, 0.6f)
             canvas.drawPath(edgePath, liquidEdgePaint)
             canvas.restore()
         }
@@ -1346,7 +1369,7 @@ class BatteryFaceView @JvmOverloads constructor(
 
         // Outline over everything, gradient-shaded.
         outlinePaint.shader = palette.outline
-        outlinePaint.strokeWidth = dp(4.5f)
+        outlinePaint.strokeWidth = dp(4.5f) * maxOf(sizeScale, 0.55f)
         canvas.drawRoundRect(bodyRect, radius, radius, outlinePaint)
         outlinePaint.shader = null
 
@@ -1442,14 +1465,17 @@ class BatteryFaceView @JvmOverloads constructor(
     private fun drawCrystals(canvas: Canvas, color: Int) {
         val l = bodyRect.left; val t = bodyRect.top
         val bw = bodyRect.width(); val bh = bodyRect.height()
+        // Flake radii scale with the face (v0.3.19); positions are
+        // body-relative already, so the composition is unchanged.
+        val cs = maxOf(sizeScale, 0.55f)
         // Balanced around the upright body — beside the cap, down both
         // sides, two faint inside the glass — never bunched on top:
-        snowflake(canvas, l - bw * 0.16f, t + bh * 0.02f, dp(13f), color, 235)
-        snowflake(canvas, l + bw * 1.16f, t + bh * 0.02f, dp(11f), color, 235)
-        snowflake(canvas, l - bw * 0.20f, t + bh * 0.42f, dp(8.5f), color, 200)
-        snowflake(canvas, l + bw * 1.20f, t + bh * 0.55f, dp(7.5f), color, 200)
-        snowflake(canvas, l + bw * 0.26f, t + bh * 0.22f, dp(7f), color, 110)
-        snowflake(canvas, l + bw * 0.74f, t + bh * 0.68f, dp(6f), color, 110)
+        snowflake(canvas, l - bw * 0.16f, t + bh * 0.02f, dp(13f) * cs, color, 235)
+        snowflake(canvas, l + bw * 1.16f, t + bh * 0.02f, dp(11f) * cs, color, 235)
+        snowflake(canvas, l - bw * 0.20f, t + bh * 0.42f, dp(8.5f) * cs, color, 200)
+        snowflake(canvas, l + bw * 1.20f, t + bh * 0.55f, dp(7.5f) * cs, color, 200)
+        snowflake(canvas, l + bw * 0.26f, t + bh * 0.22f, dp(7f) * cs, color, 110)
+        snowflake(canvas, l + bw * 0.74f, t + bh * 0.68f, dp(6f) * cs, color, 110)
         drawSparkles(canvas)
     }
 
@@ -1495,10 +1521,11 @@ class BatteryFaceView @JvmOverloads constructor(
             floatArrayOf(l - dp(10f), t + bh * 0.72f, 5.2f, 1.2f),
             floatArrayOf(l + bw + dp(10f), t + bh * 0.82f, 4.6f, 3.2f),
         )
+        val cs = maxOf(sizeScale, 0.55f)
         for ((cx, cy, rDp, off) in spots) {
             val tw = 0.5f + 0.5f * sin(phase + off).toFloat()
             sparklePaint.alpha = (40 + 120 * tw).toInt()
-            val r = dp(rDp) * (0.85f + 0.15f * tw)
+            val r = dp(rDp) * cs * (0.85f + 0.15f * tw)
             sparklePath.reset()
             sparklePath.moveTo(cx, cy - r)
             sparklePath.quadTo(cx, cy, cx + r, cy)
@@ -1595,6 +1622,35 @@ class BatteryFaceView @JvmOverloads constructor(
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
     companion object {
+        /**
+         * The battery body's rect (dp) inside a slot of the given
+         * size — the single source for the face's geometry (v0.3.19).
+         * onSizeChanged draws from it, and the home screen's glass
+         * plate mirrors it, so plate and face can never drift apart.
+         * The headroom above the body (flames / cap) and the shadow
+         * zone below scale with the slot height relative to the
+         * full-size 320dp slot; at 320dp every value is exactly the
+         * pre-v0.3.19 geometry (top zone 58dp, shadow zone 20dp,
+         * body capped at 272dp tall and 60% of the slot wide, top
+         * biased 0.35 into the leftover height).
+         */
+        fun bodyRectDp(slotWDp: Float, slotHDp: Float): RectF {
+            val zoneScale = (slotHDp / 320f).coerceAtMost(1f)
+            val topZone = 58f * zoneScale
+            val bottomZone = 20f * zoneScale
+            val availH = (slotHDp - topZone - bottomZone).coerceAtLeast(30f)
+            var bodyH = min(availH, 272f)
+            var bodyW = bodyH / 1.55f
+            val maxBodyW = slotWDp * 0.60f
+            if (bodyW > maxBodyW) {
+                bodyW = maxBodyW
+                bodyH = bodyW * 1.55f
+            }
+            val left = (slotWDp - bodyW) / 2f
+            val top = topZone + (availH - bodyH) * 0.35f
+            return RectF(left, top, left + bodyW, top + bodyH)
+        }
+
         // Snowflake branch positions along each arm: (fraction, length fraction) pairs.
         private val BRANCHES = floatArrayOf(0.52f, 0.34f, 0.78f, 0.24f)
         private const val EMBER_COUNT = 12
