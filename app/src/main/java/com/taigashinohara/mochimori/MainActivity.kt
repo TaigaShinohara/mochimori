@@ -1,6 +1,7 @@
 package com.taigashinohara.mochimori
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
@@ -11,7 +12,11 @@ import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.ShapeDrawable
 import android.graphics.drawable.shapes.OvalShape
 import android.graphics.drawable.shapes.RoundRectShape
+import android.location.LocationManager
 import android.net.Uri
+import android.net.wifi.SupplicantState
+import android.net.wifi.WifiManager
+import android.nfc.NfcAdapter
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -134,6 +139,20 @@ import kotlin.math.roundToLong
  * saver, the rules screen for auto-saving, the permission flow when
  * the auto-saving row is waiting on it, and a short cooling-how-to
  * dialog for temperature (no settings screen exists for heat).
+ * v0.3.16: the checklist grows, at the user's request ("もっと節電
+ * するためのチェックを増やそう。可能な限り節電したい"), and its head
+ * becomes a donut chart with a big percent (DonutChartView) over the
+ * same honest counting (UNKNOWN and advice rows stay out of the
+ * denominator). New scored rows, each read with NO new permission:
+ * Wi-Fi (radio state + supplicant state, which survives WifiInfo's
+ * location redaction — ConnectivityManager is not used because its
+ * reads require ACCESS_NETWORK_STATE), mobile data (Settings.Global,
+ * row omitted when unreadable), location, NFC (row omitted without
+ * hardware), dark theme (OLED premise named in the item), haptic
+ * feedback. Bluetooth is advice-only: connected-or-not cannot be
+ * read without BLUETOOTH_CONNECT, so an ON row informs and never
+ * scores. Master auto-sync was NOT adopted: its getter is enforced
+ * behind READ_SYNC_SETTINGS in the system server.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -856,12 +875,12 @@ class MainActivity : AppCompatActivity() {
                     col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
                 }
         }
-        // Saving checklist (v0.3.15, user request): under the numbers
-        // chip and the state action, so the emergency button above
-        // keeps its priority. The card is reading glass (card() with
-        // the surfaceContainer role), the rows are measured values
-        // judged by SavingChecklist, and every row taps through to
-        // the place that can change it (see onChecklistTap).
+        // Saving checklist (v0.3.15, expanded v0.3.16): under the
+        // numbers chip and the state action, so the emergency button
+        // above keeps its priority. The card is reading glass (card()
+        // with the surfaceContainer role), the rows are measured
+        // values judged by SavingChecklist, and every row taps
+        // through to the place that can change it (see onChecklistTap).
         val checklist = checklistCard(SavingChecklist.evaluate(readChecklistInput(s)))
         withTopMargin(checklist, CARD_GAP)
         col.addView(checklist)
@@ -901,16 +920,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- Saving checklist (v0.3.15) ----------
+    // ---------- Saving checklist (v0.3.15, expanded v0.3.16) ----------
 
     /**
      * Assemble the checklist's measured inputs. The battery facts come
-     * from the snapshot the home screen already read; the three values
-     * the snapshot does not carry (brightness mode, screen-off
-     * timeout, power-save mode) are read here, each with its own
-     * "could not read" sentinel so SavingChecklist can stay honest
-     * (UNKNOWN -> 「確認中」) instead of guessing. Reading settings
-     * needs no permission beyond what the app already uses.
+     * from the snapshot the home screen already read; the values the
+     * snapshot does not carry (brightness mode, screen-off timeout,
+     * power-save mode, and the v0.3.16 radio/theme/haptic reads) are
+     * read here, each with its own "could not read" sentinel so
+     * SavingChecklist can stay honest (UNKNOWN -> 「確認中」, or the
+     * row omitted where the spec says so) instead of guessing.
+     * Reading settings needs no permission beyond what the app
+     * already uses.
      */
     private fun readChecklistInput(s: BatterySnapshot): SavingChecklist.Input {
         val cr = contentResolver
@@ -930,6 +951,106 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             null
         }
+        // v0.3.16: the expanded checklist's reads. Each one is a
+        // plain state read that needs no permission beyond the three
+        // the app already carries; each failure lands on its own
+        // "could not read" sentinel (see SavingChecklist).
+        val wifiManager = try {
+            getSystemService(WifiManager::class.java)
+        } catch (e: Exception) {
+            null
+        }
+        val wifiEnabled: Boolean? = try {
+            wifiManager?.isWifiEnabled
+        } catch (e: Exception) {
+            null
+        }
+        // The supplicant state is not among the WifiInfo fields the
+        // platform redacts for apps without the location permission
+        // (SSID / BSSID / network id are), so COMPLETED is a real
+        // "associated" signal. Transitional states settle on null —
+        // the row then says 確認中 instead of guessing either way.
+        @Suppress("DEPRECATION")
+        val wifiConnected: Boolean? = if (wifiEnabled == true) {
+            try {
+                when (wifiManager?.connectionInfo?.supplicantState) {
+                    SupplicantState.COMPLETED -> true
+                    SupplicantState.DISCONNECTED, SupplicantState.INACTIVE,
+                    SupplicantState.UNINITIALIZED, SupplicantState.INTERFACE_DISABLED,
+                    SupplicantState.INVALID -> false
+                    else -> null
+                }
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        val locationEnabled: Boolean? = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                getSystemService(LocationManager::class.java)?.isLocationEnabled
+            } else {
+                @Suppress("DEPRECATION")
+                Settings.Secure.getInt(cr, Settings.Secure.LOCATION_MODE) !=
+                    Settings.Secure.LOCATION_MODE_OFF
+            }
+        } catch (e: Exception) {
+            null
+        }
+        val nfcAdapter = try {
+            NfcAdapter.getDefaultAdapter(this)
+        } catch (e: Exception) {
+            null
+        }
+        val nfcEnabled: Boolean? = if (nfcAdapter != null) {
+            try {
+                nfcAdapter.isEnabled
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        // The "mobile_data" global setting is a plain read (its
+        // Settings.Global constant is not public API, so the key is
+        // spelled out); when the key is absent the sentinel stays
+        // down and the checklist omits the row rather than guessing.
+        var mobileDataReadable = false
+        var mobileDataEnabled: Boolean? = null
+        try {
+            when (Settings.Global.getInt(cr, "mobile_data", -1)) {
+                1 -> {
+                    mobileDataReadable = true
+                    mobileDataEnabled = true
+                }
+                0 -> {
+                    mobileDataReadable = true
+                    mobileDataEnabled = false
+                }
+            }
+        } catch (e: Exception) {
+            // Unreadable: the row is omitted (see SavingChecklist).
+        }
+        val darkTheme =
+            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES
+        val hapticEnabled: Boolean? = try {
+            when (Settings.System.getInt(cr, Settings.System.HAPTIC_FEEDBACK_ENABLED, -1)) {
+                1 -> true
+                0 -> false
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+        // isEnabled is one of the adapter reads that does not
+        // require BLUETOOTH_CONNECT; whether anything is *connected*
+        // would require it, so Bluetooth stays advice-only.
+        val bluetoothOn: Boolean? = try {
+            getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled
+        } catch (e: Exception) {
+            null
+        }
         return SavingChecklist.Input(
             levelPercent = s.levelPercent,
             levelKnown = s.levelKnown,
@@ -943,25 +1064,80 @@ class MainActivity : AppCompatActivity() {
             autoSavingEnabled = prefs.getBoolean("auto_saving", true),
             canWriteSettings = s.canWriteSettings,
             saverThresholdPercent = 30,
+            wifiEnabled = wifiEnabled,
+            wifiConnected = wifiConnected,
+            locationEnabled = locationEnabled,
+            nfcPresent = nfcAdapter != null,
+            nfcEnabled = nfcEnabled,
+            mobileDataReadable = mobileDataReadable,
+            mobileDataEnabled = mobileDataEnabled,
+            darkTheme = darkTheme,
+            hapticEnabled = hapticEnabled,
+            bluetoothOn = bluetoothOn,
         )
     }
 
     /**
-     * The checklist card: title + one-line summary at the head, then
-     * one tappable row per item. The surface is the shared card()
-     * reading glass — text sits on it, so it takes the thick,
-     * text-bearing recipe like every other reading surface.
+     * The checklist card: a head with the donut chart and its big
+     * percent (v0.3.16) beside the title and the one-line summary,
+     * then one tappable row per item. The surface is the shared
+     * card() reading glass — text sits on it, so it takes the
+     * thick, text-bearing recipe like every other reading surface.
+     * The percent is SavingChecklist.percent: judged items only,
+     * UNKNOWN and advice rows out of the denominator, and a dash in
+     * the middle when nothing could be judged at all.
      */
     private fun checklistCard(entries: List<SavingChecklist.Entry>): MaterialCardView {
         val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
         val box = cardColumn(c)
-        box.addView(label("節電チェック", taTitleMedium, literalColor = colorOnSurface, center = false))
-        box.addView(
-            label(
-                SavingChecklist.summary(entries), taBodyMedium,
-                literalColor = colorOnSurfaceVariant, center = false,
+        val percent = SavingChecklist.percent(entries)
+        val summary = SavingChecklist.summary(entries)
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val donutSize = dp(72)
+        val donutWrap = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(donutSize, donutSize)
+            contentDescription =
+                if (percent != null) "節電チェック ${percent}パーセント、$summary" else "節電チェック、$summary"
+        }
+        donutWrap.addView(
+            DonutChartView(this).apply {
+                this.percent = percent
+                progressColor = colorCool
+                trackColor = themeColor(com.google.android.material.R.attr.colorSurfaceVariant)
+            },
+            FrameLayout.LayoutParams(donutSize, donutSize),
+        )
+        donutWrap.addView(
+            TextView(this).apply {
+                text = percent?.let { "$it%" } ?: "―"
+                setTextAppearance(taTitleLarge)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(colorOnSurface)
+                gravity = Gravity.CENTER
+            },
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
+        head.addView(donutWrap)
+        val headTexts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), 0, 0, 0)
+        }
+        headTexts.addView(label("節電チェック", taTitleMedium, literalColor = colorOnSurface, center = false))
+        headTexts.addView(
+            label(summary, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false),
+        )
+        head.addView(
+            headTexts,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        box.addView(head)
         entries.forEach { box.addView(checklistRow(it)) }
         return c
     }
@@ -979,14 +1155,6 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
             minimumHeight = dp(48)
             setPadding(dp(4), dp(4), dp(4), dp(4))
-            val tv = TypedValue()
-            if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
-                setBackgroundResource(tv.resourceId)
-            }
-            isClickable = true
-            isFocusable = true
-            contentDescription = "${entry.name} ${entry.valueText}"
-            setOnClickListener { onChecklistTap(entry) }
         }
         row.addView(checkMark(entry.status))
         val name = label(entry.name, taBodyLarge, literalColor = colorOnSurface, center = false).apply {
@@ -996,14 +1164,40 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         row.addView(label(entry.valueText, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false))
-        return row
+        val note = entry.note
+        val root: View = if (note == null) {
+            row
+        } else {
+            // Advice rows (Bluetooth) carry a second, quieter line
+            // under the value line, indented to the item name.
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(row)
+                addView(
+                    label(note, taBodySmall, literalColor = colorOnSurfaceVariant, center = false).apply {
+                        setPadding(dp(44), 0, dp(4), dp(8))
+                    },
+                )
+            }
+        }
+        return root.apply {
+            val tv = TypedValue()
+            if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                setBackgroundResource(tv.resourceId)
+            }
+            isClickable = true
+            isFocusable = true
+            contentDescription =
+                listOfNotNull(entry.name, entry.valueText, entry.note).joinToString(" ")
+            setOnClickListener { onChecklistTap(entry) }
+        }
     }
 
     /**
      * Status mark: a glyph in a small filled circle, distinguished by
      * shape AND colour (✓ in the cool role, ！ in the warning role,
-     * ？ in the surface-variant role) so the meaning never rides on
-     * colour alone. The circle fill is the matching container colour
+     * ？ and i in the surface-variant role) so the meaning never rides
+     * on colour alone. The circle fill is the matching container colour
      * and the glyph its role colour — large-symbol contrast in both
      * schemes.
      */
@@ -1021,6 +1215,13 @@ class MainActivity : AppCompatActivity() {
             )
             SavingChecklist.Status.UNKNOWN -> Triple(
                 "？",
+                themeColor(com.google.android.material.R.attr.colorSurfaceVariant),
+                colorOnSurfaceVariant,
+            )
+            SavingChecklist.Status.INFO -> Triple(
+                // Advice, not a verdict: the same quiet surface as
+                // UNKNOWN, told apart by the glyph (i, not ？).
+                "i",
                 themeColor(com.google.android.material.R.attr.colorSurfaceVariant),
                 colorOnSurfaceVariant,
             )
@@ -1042,11 +1243,15 @@ class MainActivity : AppCompatActivity() {
      * when the auto-saving row is waiting on it, and a how-to dialog
      * for temperature — heat has no settings screen, so the honest
      * destination is an explanation (the same cooling advice the
-     * home HEAT line gives, spelled out).
+     * home HEAT line gives, spelled out). The v0.3.16 rows each open
+     * the settings screen that owns their switch (Wi-Fi, data usage,
+     * location, NFC, Bluetooth, sound for haptics, display for the
+     * dark theme).
      */
     private fun onChecklistTap(entry: SavingChecklist.Entry) {
         when (entry.item) {
-            SavingChecklist.Item.BRIGHTNESS, SavingChecklist.Item.SCREEN_TIMEOUT ->
+            SavingChecklist.Item.BRIGHTNESS, SavingChecklist.Item.SCREEN_TIMEOUT,
+            SavingChecklist.Item.DARK_THEME ->
                 openDisplaySettings()
             SavingChecklist.Item.TEMPERATURE -> showCoolingDialog()
             SavingChecklist.Item.POWER_SAVER -> openBatterySaverSettings()
@@ -1058,6 +1263,21 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     showScreen(1)
                 }
+            // v0.3.16 rows: each goes to the settings screen that
+            // owns the switch, with the wireless/sound screens as
+            // fallbacks where a direct screen may not exist.
+            SavingChecklist.Item.WIFI ->
+                openSettingsAction(Settings.ACTION_WIFI_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
+            SavingChecklist.Item.MOBILE_DATA ->
+                openSettingsAction(Settings.ACTION_DATA_USAGE_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
+            SavingChecklist.Item.LOCATION ->
+                openSettingsAction(Settings.ACTION_LOCATION_SOURCE_SETTINGS, null)
+            SavingChecklist.Item.NFC ->
+                openSettingsAction(Settings.ACTION_NFC_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
+            SavingChecklist.Item.BLUETOOTH ->
+                openSettingsAction(Settings.ACTION_BLUETOOTH_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
+            SavingChecklist.Item.HAPTIC_FEEDBACK ->
+                openSettingsAction(Settings.ACTION_SOUND_SETTINGS, null)
         }
     }
 
@@ -1066,6 +1286,24 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
         } catch (e: Exception) {
             startActivity(Intent(Settings.ACTION_SETTINGS))
+        }
+    }
+
+    /**
+     * Open a specific settings screen, falling back to a broader
+     * screen and finally to the settings top when a device does not
+     * implement the direct one.
+     */
+    private fun openSettingsAction(action: String, fallback: String?) {
+        try {
+            startActivity(Intent(action))
+        } catch (e: Exception) {
+            try {
+                if (fallback != null) startActivity(Intent(fallback))
+                else throw e
+            } catch (e2: Exception) {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            }
         }
     }
 

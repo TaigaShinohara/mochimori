@@ -18,6 +18,20 @@ class SavingChecklistTest {
         powerSaveMode = false,
         autoSavingEnabled = true,
         canWriteSettings = true,
+        // v0.3.16 rows, all in their fine state: radios off, dark
+        // theme on, haptics off. NFC hardware absent and the mobile
+        // data value unreadable, so those two rows are omitted;
+        // Bluetooth off, so no advice row either.
+        wifiEnabled = false,
+        wifiConnected = null,
+        locationEnabled = false,
+        nfcPresent = false,
+        nfcEnabled = null,
+        mobileDataReadable = false,
+        mobileDataEnabled = null,
+        darkTheme = true,
+        hapticEnabled = false,
+        bluetoothOn = false,
     )
 
     private fun entry(
@@ -204,23 +218,258 @@ class SavingChecklistTest {
         assertEquals("許可が必要", e.valueText)
     }
 
+    // ---- Wi-Fi (v0.3.16: NG only when on and unassociated) ----
+
+    @Test fun wifiOff_isOk() {
+        val e = entry(baseInput(), SavingChecklist.Item.WIFI)
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun wifiOnConnected_isOk() {
+        val e = entry(
+            baseInput().copy(wifiEnabled = true, wifiConnected = true),
+            SavingChecklist.Item.WIFI,
+        )
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("接続中", e.valueText)
+    }
+
+    @Test fun wifiOnUnconnected_isNg() {
+        val e = entry(
+            baseInput().copy(wifiEnabled = true, wifiConnected = false),
+            SavingChecklist.Item.WIFI,
+        )
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("ON（未接続）", e.valueText)
+    }
+
+    @Test fun wifiOnTransition_isUnknownNotNg() {
+        val e = entry(
+            baseInput().copy(wifiEnabled = true, wifiConnected = null),
+            SavingChecklist.Item.WIFI,
+        )
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    @Test fun wifiUnreadable_isUnknown() {
+        val e = entry(baseInput().copy(wifiEnabled = null), SavingChecklist.Item.WIFI)
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    // ---- Mobile data (row exists only when the value was readable) ----
+
+    @Test fun mobileDataUnreadable_omitsRow() {
+        val items = SavingChecklist.evaluate(baseInput()).map { it.item }
+        assertEquals(false, items.contains(SavingChecklist.Item.MOBILE_DATA))
+    }
+
+    @Test fun mobileDataOff_isOk() {
+        val e = entry(
+            baseInput().copy(mobileDataReadable = true, mobileDataEnabled = false),
+            SavingChecklist.Item.MOBILE_DATA,
+        )
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun mobileDataOn_isNg() {
+        val e = entry(
+            baseInput().copy(mobileDataReadable = true, mobileDataEnabled = true),
+            SavingChecklist.Item.MOBILE_DATA,
+        )
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("ON", e.valueText)
+    }
+
+    @Test fun mobileDataOnWhileWifiConnected_isOkNeutral() {
+        val e = entry(
+            baseInput().copy(
+                mobileDataReadable = true, mobileDataEnabled = true,
+                wifiEnabled = true, wifiConnected = true,
+            ),
+            SavingChecklist.Item.MOBILE_DATA,
+        )
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("Wi-Fi接続中", e.valueText)
+    }
+
+    // ---- Location ----
+
+    @Test fun locationOn_isNg() {
+        val e = entry(baseInput().copy(locationEnabled = true), SavingChecklist.Item.LOCATION)
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("ON", e.valueText)
+    }
+
+    @Test fun locationOff_isOk() {
+        val e = entry(baseInput(), SavingChecklist.Item.LOCATION)
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun locationUnreadable_isUnknown() {
+        val e = entry(baseInput().copy(locationEnabled = null), SavingChecklist.Item.LOCATION)
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    // ---- NFC (row exists only on devices with the hardware) ----
+
+    @Test fun nfcAbsent_omitsRow() {
+        val items = SavingChecklist.evaluate(baseInput()).map { it.item }
+        assertEquals(false, items.contains(SavingChecklist.Item.NFC))
+    }
+
+    @Test fun nfcOn_isNg() {
+        val e = entry(
+            baseInput().copy(nfcPresent = true, nfcEnabled = true),
+            SavingChecklist.Item.NFC,
+        )
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("ON", e.valueText)
+    }
+
+    @Test fun nfcOff_isOk() {
+        val e = entry(
+            baseInput().copy(nfcPresent = true, nfcEnabled = false),
+            SavingChecklist.Item.NFC,
+        )
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun nfcPresentUnreadable_isUnknown() {
+        val e = entry(
+            baseInput().copy(nfcPresent = true, nfcEnabled = null),
+            SavingChecklist.Item.NFC,
+        )
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    // ---- Bluetooth (advice only: never judged, never scored) ----
+
+    @Test fun bluetoothOff_noRow() {
+        val items = SavingChecklist.evaluate(baseInput()).map { it.item }
+        assertEquals(false, items.contains(SavingChecklist.Item.BLUETOOTH))
+    }
+
+    @Test fun bluetoothUnreadable_noRow() {
+        val items = SavingChecklist.evaluate(baseInput().copy(bluetoothOn = null)).map { it.item }
+        assertEquals(false, items.contains(SavingChecklist.Item.BLUETOOTH))
+    }
+
+    @Test fun bluetoothOn_isInfoRowOutsideScore() {
+        val e = entry(baseInput().copy(bluetoothOn = true), SavingChecklist.Item.BLUETOOTH)
+        assertEquals(SavingChecklist.Status.INFO, e.status)
+        assertEquals(false, e.countsTowardScore)
+        assertEquals("ON", e.valueText)
+    }
+
+    // ---- Dark theme (OLED premise rides in the item name) ----
+
+    @Test fun darkThemeOn_isOk() {
+        val e = entry(baseInput(), SavingChecklist.Item.DARK_THEME)
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("ダークテーマ（有機EL）", e.name)
+        assertEquals("ON", e.valueText)
+    }
+
+    @Test fun darkThemeOff_isNg() {
+        val e = entry(baseInput().copy(darkTheme = false), SavingChecklist.Item.DARK_THEME)
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    // ---- Haptic feedback ----
+
+    @Test fun hapticOn_isNg() {
+        val e = entry(baseInput().copy(hapticEnabled = true), SavingChecklist.Item.HAPTIC_FEEDBACK)
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("ON", e.valueText)
+    }
+
+    @Test fun hapticOff_isOk() {
+        val e = entry(baseInput(), SavingChecklist.Item.HAPTIC_FEEDBACK)
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun hapticAbsent_isUnknown() {
+        val e = entry(baseInput().copy(hapticEnabled = null), SavingChecklist.Item.HAPTIC_FEEDBACK)
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    // ---- Percent (donut score: judged rows only) ----
+
+    @Test fun percentAllOk_is100() {
+        assertEquals(100, SavingChecklist.percent(SavingChecklist.evaluate(baseInput())))
+    }
+
+    @Test fun percentHalf_is50() {
+        // Hand-built: one OK and one NG among the judged rows.
+        val entries = listOf(
+            SavingChecklist.Entry(
+                SavingChecklist.Item.WIFI, "Wi-Fi",
+                SavingChecklist.Status.OK, "OFF",
+            ),
+            SavingChecklist.Entry(
+                SavingChecklist.Item.LOCATION, "位置情報",
+                SavingChecklist.Status.NG, "ON",
+            ),
+        )
+        assertEquals(50, SavingChecklist.percent(entries))
+    }
+
+    @Test fun percentExcludesUnknownAndInfo() {
+        val entries = listOf(
+            SavingChecklist.Entry(
+                SavingChecklist.Item.WIFI, "Wi-Fi",
+                SavingChecklist.Status.OK, "OFF",
+            ),
+            SavingChecklist.Entry(
+                SavingChecklist.Item.LOCATION, "位置情報",
+                SavingChecklist.Status.UNKNOWN, "確認中",
+            ),
+            SavingChecklist.Entry(
+                SavingChecklist.Item.BLUETOOTH, "Bluetooth",
+                SavingChecklist.Status.INFO, "ON", countsTowardScore = false,
+            ),
+        )
+        assertEquals(100, SavingChecklist.percent(entries))
+    }
+
+    @Test fun percentNothingJudged_isNull() {
+        val entries = listOf(
+            SavingChecklist.Entry(
+                SavingChecklist.Item.WIFI, "Wi-Fi",
+                SavingChecklist.Status.UNKNOWN, "確認中",
+            ),
+        )
+        assertEquals(null, SavingChecklist.percent(entries))
+    }
+
     // ---- Summary line ----
 
     @Test fun summaryAllOk_saysAll() {
-        assertEquals("5つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(baseInput())))
+        assertEquals("9つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(baseInput())))
     }
 
     @Test fun summaryMixed_countsOk() {
         val input = baseInput().copy(brightness = 255, autoSavingEnabled = false)
-        assertEquals("5つ中3つ できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
+        assertEquals("9つ中7つ できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
     }
 
     @Test fun summaryWithUnknown_mentionsChecking() {
         val input = baseInput().copy(brightness = -1, brightnessAuto = null)
         assertEquals(
-            "4つ中4つ できてる（1つ確認中）",
+            "8つ中8つ できてる（1つ確認中）",
             SavingChecklist.summary(SavingChecklist.evaluate(input)),
         )
+    }
+
+    @Test fun summaryIgnoresInfoRow() {
+        val input = baseInput().copy(bluetoothOn = true)
+        assertEquals("9つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
     }
 
     // ---- Timeout formatting ----
@@ -232,7 +481,7 @@ class SavingChecklistTest {
         assertEquals("1分30秒", SavingChecklist.formatTimeout(90_000))
     }
 
-    @Test fun evaluate_returnsFiveItemsInOrder() {
+    @Test fun evaluate_returnsScoredItemsInOrder() {
         val items = SavingChecklist.evaluate(baseInput()).map { it.item }
         assertEquals(
             listOf(
@@ -241,6 +490,10 @@ class SavingChecklistTest {
                 SavingChecklist.Item.TEMPERATURE,
                 SavingChecklist.Item.POWER_SAVER,
                 SavingChecklist.Item.AUTO_SAVING,
+                SavingChecklist.Item.WIFI,
+                SavingChecklist.Item.LOCATION,
+                SavingChecklist.Item.DARK_THEME,
+                SavingChecklist.Item.HAPTIC_FEEDBACK,
             ),
             items,
         )
