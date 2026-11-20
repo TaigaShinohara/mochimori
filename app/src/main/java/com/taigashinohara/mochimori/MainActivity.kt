@@ -33,7 +33,6 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.navigation.NavigationBarView
-import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlin.math.roundToLong
 
 /**
@@ -109,6 +108,15 @@ import kotlin.math.roundToLong
  * capacity labelled 推定 — and never a degradation percentage (the
  * design capacity is not readable). The old level × 18h estimate is
  * retired: BatteryJudge no longer carries it.
+ * v0.3.14: the insights tab is retired at the user's decision (they
+ * chose "remove the tab, two tabs only" from presented options): the
+ * Navigation Bar is now home / rules, and the insights screen — its
+ * cards, its fix actions, its icon — is deleted. Nothing moves to
+ * home: the face + reason + fix button there already carry "the
+ * current problem and how to fix it". The history the remaining-time
+ * estimate depends on (BatteryHistory / BatteryPace) is untouched,
+ * as are the periodic check and the widget. Screen indices shift:
+ * rules is now screen 1.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -120,7 +128,6 @@ class MainActivity : AppCompatActivity() {
     private var snap: BatterySnapshot? = null
     private var currentScreen = 0
     private var detailsOpen = false
-    private var goodOpen = false
     private var onboardingPage = 0
     private var syncingNav = false
 
@@ -271,8 +278,7 @@ class MainActivity : AppCompatActivity() {
                 if (syncingNav) return@setOnItemSelectedListener true
                 showScreen(
                     when (item.itemId) {
-                        R.id.nav_insights -> 1
-                        R.id.nav_rules -> 2
+                        R.id.nav_rules -> 1
                         else -> 0
                     },
                 )
@@ -337,8 +343,7 @@ class MainActivity : AppCompatActivity() {
         currentScreen = index
         // Keep the Navigation Bar selection in sync without re-entering the listener.
         val targetId = when (index) {
-            1 -> R.id.nav_insights
-            2 -> R.id.nav_rules
+            1 -> R.id.nav_rules
             else -> R.id.nav_home
         }
         if (bottomNav.selectedItemId != targetId) {
@@ -348,8 +353,7 @@ class MainActivity : AppCompatActivity() {
         }
         setContent(
             when (index) {
-                1 -> buildInsights()
-                2 -> buildRules()
+                1 -> buildRules()
                 else -> buildHome()
             },
         )
@@ -871,120 +875,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ---------- Insights (R4, R5) ----------
-    private enum class FixAction { BRIGHTNESS, AUTO_ON, HEAT_GUIDE, SAVER }
-    private data class Insight(
-        val title: String,
-        val detail: String,
-        val percent: Int,
-        val fixLabel: String?,
-        val fix: FixAction?,
-        // Good-state items speak in the cool role, never the warning role
-        // (v0.3.1 design pass: colour must match the meaning of the item).
-        val good: Boolean = false,
-    )
-
-    private fun buildInsights(): View {
-        refresh()
-        val s = snap!!
-        val waste = mutableListOf<Insight>()
-        val good = mutableListOf<Insight>()
-        if (s.brightness >= BatteryJudge.BRIGHTNESS_NEAR_MAX) {
-            // Detail is the number only; the bar already shows the amount
-            // (audit R-9). No ranking claim ("いちばん大きい") in prose.
-            waste += Insight("明るさが最大付近のまま", "${s.brightness}/255", 90, "明るさを下げる", FixAction.BRIGHTNESS)
-        } else if (s.brightness >= 0) {
-            good += Insight("明るさは控えめ", "現在 ${s.brightness}/255", (s.brightness * 100 / 255).coerceIn(5, 100), null, null, good = true)
-        }
-        if (s.tempKnown && s.tempC >= 35f) {
-            waste += Insight("電池が温かい", "現在 ${"%.1f".format(s.tempC)}℃ ・ 熱は電池の大敵です", ((s.tempC - 30) * 8).toInt().coerceIn(10, 100), "冷まし方を見る", FixAction.HEAT_GUIDE)
-        }
-        if (s.levelKnown && s.levelPercent <= 30 && !prefs.getBoolean("auto_saving", true)) {
-            waste += Insight("自動節電がOFF", "残量 ${s.levelPercent}% ・ ONにすると自動で下げます", 100 - s.levelPercent, "ルールでONにする", FixAction.AUTO_ON)
-        }
-        if (s.levelKnown && s.levelPercent <= BatteryJudge.EMERGENCY_PERCENT) {
-            waste += Insight("残量がわずか", "現在 ${s.levelPercent}% ・ 省電力モードの出番です", 100 - s.levelPercent, "省電力モードを開く", FixAction.SAVER)
-        }
-        val shownWaste = waste.take(3)
-        // The sample card was retired (audit R-1): no placeholder data on a
-        // real-data screen. It returns only as real data with the weekly
-        // summary feature.
-
-        val col = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(PAGE_PAD_H), dp(16), dp(PAGE_PAD_H), dp(16))
-        }
-        col.addView(label("今の無駄 ${shownWaste.size}件", taTitleLarge, literalColor = colorWarning, center = false))
-        // The "責めない" posture line was removed (audit R-5): the tone is
-        // carried by the wording itself, not declared on every visit.
-        if (shownWaste.isEmpty()) {
-            // Good/empty state says so calmly instead of leaving a bare "0件"
-            // screen (v0.3.1 design pass).
-            val empty = label("今は無駄なし。良い状態です", taTitleMedium, literalColor = colorCool, center = false)
-            withTopMargin(empty, CARD_GAP)
-            col.addView(empty)
-        }
-        shownWaste.forEach { col.addView(insightCard(it)) }
-        if (good.isNotEmpty()) {
-            // Good items are folded by default (audit R-6): heading + count
-            // only. The home face already carries the "good" message; this
-            // screen's job is the waste. (The 0-waste empty-state line above
-            // stays, so an all-good screen is never bare.)
-            col.addView(textButton(if (goodOpen) "良い状態を閉じる" else "良い状態 ${good.size}件") {
-                goodOpen = !goodOpen
-                showScreen(1)
-            })
-            if (goodOpen) {
-                good.forEach { col.addView(insightCard(it)) }
-            }
-        }
-        return ScrollView(this).apply { addView(col) }
-    }
-
-    private fun insightCard(item: Insight): View {
-        val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
-        val box = cardColumn(c)
-        box.addView(label(item.title, taTitleMedium, literalColor = colorOnSurface, center = false))
-        val bar = LinearProgressIndicator(this).apply {
-            max = 100
-            setProgressCompat(item.percent, false)
-            setIndicatorColor(if (item.good) colorCool else colorWarning)
-            trackColor = themeColor(com.google.android.material.R.attr.colorSurfaceVariant)
-        }
-        val blp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        blp.topMargin = dp(8); blp.bottomMargin = dp(8) // spacing scale — was off-scale 6dp
-        box.addView(bar, blp)
-        box.addView(label(item.detail, taBodySmall, literalColor = colorOnSurfaceVariant, center = false))
-        if (item.fixLabel != null && item.fix != null) {
-            val b = MaterialButton(this).apply {
-                text = item.fixLabel
-                isAllCaps = false
-                backgroundTintList = ColorStateList.valueOf(colorWarning)
-                setTextColor(colorOnWarning)
-                setOnClickListener { runFix(item.fix) }
-            }
-            box.addView(
-                b,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) },
-            )
-        }
-        withTopMargin(c, CARD_GAP)
-        return c
-    }
-
-    private fun runFix(action: FixAction) {
-        when (action) {
-            FixAction.BRIGHTNESS -> fixBrightness()
-            FixAction.AUTO_ON -> showScreen(2)
-            FixAction.SAVER -> openBatterySaverSettings()
-            FixAction.HEAT_GUIDE -> Toast.makeText(
-                this,
-                "アプリでは直せません。ケースを外し、涼しい場所で休ませてください",
-                Toast.LENGTH_LONG,
-            ).show()
-        }
-    }
-
     // ---------- Rules ----------
     private fun buildRules(): View {
         val col = LinearLayout(this).apply {
@@ -1054,7 +944,7 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putBoolean(key, v).apply()
                 if (key == "auto_saving" && !v) ProfileManager.restore(this@MainActivity)
                 if (key == "auto_saving" && v) showIntervalNoteOnce()
-                if (key == "auto_saving") showScreen(2)
+                if (key == "auto_saving") showScreen(1)
             }
         }
         row.addView(sw)
