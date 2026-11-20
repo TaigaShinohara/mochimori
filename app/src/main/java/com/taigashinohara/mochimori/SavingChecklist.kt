@@ -2,7 +2,7 @@ package com.taigashinohara.mochimori
 
 /**
  * Pure judgement for the home screen's saving checklist (v0.3.15,
- * expanded in v0.3.16).
+ * expanded in v0.3.16, split into two tiers in v0.3.17).
  *
  * The checklist answers "節電できてるか" item by item, from measured
  * values only. Every criterion reuses an existing threshold so the
@@ -27,8 +27,8 @@ package com.taigashinohara.mochimori
  *  - Wi-Fi: WifiManager.isWifiEnabled plus the supplicant state,
  *    which survives the location-permission redaction of WifiInfo
  *    (only SSID/BSSID/networkId etc. are redacted). Connectivity
- *    Manager is NOT used: its reads require ACCESS_NETWORK_STATE,
- *    a permission this app refuses to add.
+ *    Manager's network reads are NOT used for this: they require
+ *    ACCESS_NETWORK_STATE, a permission this app refuses to add.
  *  - Mobile data: the "mobile_data" global setting, read directly.
  *    When the key cannot be read the row is omitted, never guessed.
  *  - Location: LocationManager.isLocationEnabled (API 28+) /
@@ -38,21 +38,50 @@ package com.taigashinohara.mochimori
  *  - Dark theme: the effective night mode in the configuration.
  *    The saving claim is an OLED premise, and the item name says so.
  *  - Haptic feedback: Settings.System.HAPTIC_FEEDBACK_ENABLED.
- *  - Bluetooth: whether it is connected cannot be known without
- *    BLUETOOTH_CONNECT, so ON/OFF alone never earns a verdict. The
- *    row is INFO only — shown while Bluetooth is ON, carrying the
- *    "turn it off if unused" advice — and never enters the score.
  * Not adopted: master auto-sync. ContentResolver's getter is
  * enforced behind READ_SYNC_SETTINGS in the system server, so it
  * cannot be read under the no-new-permissions rule.
+ *
+ * v0.3.17: the checklist splits into two tiers (user request:
+ * 「通常の節電と、限界までやる節電でチェックリストを分けて」).
+ * The yardstick for the split is whether reaching OK costs everyday
+ * convenience:
+ *  - NORMAL (always shown): brightness, screen timeout,
+ *    temperature, power saver, auto saving, Wi-Fi, dark theme —
+ *    states that are either free to keep (Wi-Fi connected, dark
+ *    theme on an OLED) or already the app's own business.
+ *  - LIMIT (shown only while the user's 「限界まで節電」 mode is
+ *    ON): mobile data, location, NFC, Bluetooth, haptic feedback,
+ *    data saver — radios and services whose OFF state is a real
+ *    daily-life trade-off, so they are only asked for when the user
+ *    has explicitly chosen to squeeze the battery to the limit.
+ * Bluetooth moves with the split: on the normal side it could only
+ * ever be an advice row (whether anything is connected cannot be
+ * read without BLUETOOTH_CONNECT), but the limit tier's premise is
+ * "sacrifice convenience", so there ON is judged NG outright and
+ * the row scores like any other. The normal side's INFO row is
+ * gone. Data saver joins the limit tier: ConnectivityManager
+ * .getRestrictBackgroundStatus() carries no permission annotation
+ * in the platform (verified against the SDK's annotation set —
+ * methods that need ACCESS_NETWORK_STATE are annotated, this one
+ * is not), and the caller still guards the read so a failure omits
+ * the row instead of guessing. ENABLED and WHITELISTED both mean
+ * the device's data saver is in force (WHITELISTED only exempts
+ * this app), so both judge OK; DISABLED judges NG.
+ * Each tier scores independently: percent() and summary() are
+ * computed per list, with the same honest counting as before.
  */
 object SavingChecklist {
 
     enum class Status { OK, NG, UNKNOWN, INFO }
 
+    /** Which card a row belongs to (v0.3.17). */
+    enum class Tier { NORMAL, LIMIT }
+
     enum class Item {
         BRIGHTNESS, SCREEN_TIMEOUT, TEMPERATURE, POWER_SAVER, AUTO_SAVING,
         WIFI, MOBILE_DATA, LOCATION, NFC, BLUETOOTH, DARK_THEME, HAPTIC_FEEDBACK,
+        DATA_SAVER,
     }
 
     /** Screen-off timeout at or below this counts as saving (30s). */
@@ -107,9 +136,18 @@ object SavingChecklist {
         /** HAPTIC_FEEDBACK_ENABLED; null when the setting is absent. */
         val hapticEnabled: Boolean? = null,
         /** BluetoothAdapter.isEnabled; null when there is no
-         *  adapter or the state cannot be read. Only ON produces a
-         *  row, and that row is advice (INFO), never a verdict. */
+         *  adapter or the state cannot be read. On the limit tier
+         *  (v0.3.17) this is judged like any other radio: ON is NG. */
         val bluetoothOn: Boolean? = null,
+        // ---- v0.3.17 addition ----
+        /** True when getRestrictBackgroundStatus() returned a
+         *  value. The data saver row is omitted when it cannot be
+         *  read — never guessed. */
+        val dataSaverReadable: Boolean = false,
+        /** True when the device's data saver is in force for this
+         *  app (status ENABLED or WHITELISTED); false when DISABLED.
+         *  Only consulted when dataSaverReadable is true. */
+        val dataSaverRestricted: Boolean? = null,
     )
 
     data class Entry(
@@ -118,38 +156,58 @@ object SavingChecklist {
         val status: Status,
         /** The measured value in one short line ("200/255", "30秒"…). */
         val valueText: String,
-        /** False for advice-only rows (Bluetooth): they are shown
-         *  but never enter the percent or the summary counts. */
+        /** False for rows that are shown but never enter the
+         *  percent or the summary counts. Since v0.3.17 no row uses
+         *  this (Bluetooth scores on the limit tier); the mechanism
+         *  stays for percent()/summary() honesty tests. */
         val countsTowardScore: Boolean = true,
-        /** Optional second line under the row (the Bluetooth advice). */
+        /** Optional second line under the row. */
         val note: String? = null,
+        /** The card this row belongs to (v0.3.17). */
+        val tier: Tier = Tier.NORMAL,
     )
 
-    fun evaluate(input: Input): List<Entry> = listOfNotNull(
+    /** The normal tier: always shown (7 items). */
+    fun evaluateNormal(input: Input): List<Entry> = listOfNotNull(
         brightnessEntry(input),
         timeoutEntry(input),
         temperatureEntry(input),
         powerSaverEntry(input),
         autoSavingEntry(input),
         wifiEntry(input),
+        darkThemeEntry(input),
+    )
+
+    /**
+     * The limit tier: shown only while 「限界まで節電」 mode is ON.
+     * Every row here costs everyday convenience when fixed, which
+     * is exactly why the tier is opt-in.
+     */
+    fun evaluateLimit(input: Input): List<Entry> = listOfNotNull(
         if (input.mobileDataReadable) mobileDataEntry(input) else null,
         locationEntry(input),
         if (input.nfcPresent) nfcEntry(input) else null,
         bluetoothEntry(input),
-        darkThemeEntry(input),
         hapticEntry(input),
+        if (input.dataSaverReadable) dataSaverEntry(input) else null,
     )
 
-    /** The scored rows: everything except advice-only (INFO) rows. */
+    /** Both tiers, normal first. Kept for callers that want the
+     *  whole picture; the home screen renders the tiers separately. */
+    fun evaluate(input: Input): List<Entry> =
+        evaluateNormal(input) + evaluateLimit(input)
+
+    /** The scored rows: everything except non-scoring rows. */
     private fun scored(entries: List<Entry>): List<Entry> =
         entries.filter { it.countsTowardScore }
 
     /**
      * Percent of judged items that are OK, for the donut chart.
      * UNKNOWN rows are excluded from the denominator (the honest
-     * counting the summary line has always used), and advice-only
+     * counting the summary line has always used), and non-scoring
      * rows never enter it. Null when nothing could be judged at
      * all, so the UI can show a dash instead of a fake number.
+     * Computed per tier by passing that tier's list.
      */
     fun percent(entries: List<Entry>): Int? {
         val judged = scored(entries).filter { it.status != Status.UNKNOWN }
@@ -158,7 +216,7 @@ object SavingChecklist {
         return Math.round(ok * 100.0 / judged.size).toInt()
     }
 
-    /** One-line summary for the card head, e.g. "5つ中4つ できてる". */
+    /** One-line summary for a card head, e.g. "5つ中4つ できてる". */
     fun summary(entries: List<Entry>): String {
         val scored = scored(entries)
         val ok = scored.count { it.status == Status.OK }
@@ -264,15 +322,15 @@ object SavingChecklist {
         val name = "モバイルデータ"
         return when {
             input.mobileDataEnabled == null ->
-                Entry(Item.MOBILE_DATA, name, Status.UNKNOWN, "確認中")
+                Entry(Item.MOBILE_DATA, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
             !input.mobileDataEnabled ->
-                Entry(Item.MOBILE_DATA, name, Status.OK, "OFF")
+                Entry(Item.MOBILE_DATA, name, Status.OK, "OFF", tier = Tier.LIMIT)
             input.wifiConnected == true ->
                 // On, but traffic rides Wi-Fi; the cellular radio is
                 // not the path in use, so this is not called a waste.
-                Entry(Item.MOBILE_DATA, name, Status.OK, "Wi-Fi接続中")
+                Entry(Item.MOBILE_DATA, name, Status.OK, "Wi-Fi接続中", tier = Tier.LIMIT)
             else ->
-                Entry(Item.MOBILE_DATA, name, Status.NG, "ON")
+                Entry(Item.MOBILE_DATA, name, Status.NG, "ON", tier = Tier.LIMIT)
         }
     }
 
@@ -280,11 +338,11 @@ object SavingChecklist {
         val name = "位置情報"
         return when {
             input.locationEnabled == null ->
-                Entry(Item.LOCATION, name, Status.UNKNOWN, "確認中")
+                Entry(Item.LOCATION, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
             input.locationEnabled ->
-                Entry(Item.LOCATION, name, Status.NG, "ON")
+                Entry(Item.LOCATION, name, Status.NG, "ON", tier = Tier.LIMIT)
             else ->
-                Entry(Item.LOCATION, name, Status.OK, "OFF")
+                Entry(Item.LOCATION, name, Status.OK, "OFF", tier = Tier.LIMIT)
         }
     }
 
@@ -292,27 +350,30 @@ object SavingChecklist {
         val name = "NFC"
         return when {
             input.nfcEnabled == null ->
-                Entry(Item.NFC, name, Status.UNKNOWN, "確認中")
+                Entry(Item.NFC, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
             input.nfcEnabled ->
-                Entry(Item.NFC, name, Status.NG, "ON")
+                Entry(Item.NFC, name, Status.NG, "ON", tier = Tier.LIMIT)
             else ->
-                Entry(Item.NFC, name, Status.OK, "OFF")
+                Entry(Item.NFC, name, Status.OK, "OFF", tier = Tier.LIMIT)
         }
     }
 
     /**
-     * Bluetooth advice row: present only while Bluetooth is ON.
-     * Whether anything is connected cannot be read without
-     * BLUETOOTH_CONNECT, so ON alone is never judged NG — the row
-     * carries the advice and stays out of the score.
+     * Bluetooth on the limit tier (v0.3.17): the tier's premise is
+     * squeezing the battery at the cost of convenience, so ON is a
+     * plain NG and the row scores — unlike the normal tier's old
+     * advice row, which never judged because connected-or-not
+     * cannot be read without BLUETOOTH_CONNECT. OFF is OK; an
+     * unreadable state stays UNKNOWN rather than disappearing, so
+     * the tier's denominator stays honest.
      */
-    private fun bluetoothEntry(input: Input): Entry? {
-        if (input.bluetoothOn != true) return null
-        return Entry(
-            Item.BLUETOOTH, "Bluetooth", Status.INFO, "ON",
-            countsTowardScore = false,
-            note = "使っていなければ、OFFにすると節電になります",
-        )
+    private fun bluetoothEntry(input: Input): Entry {
+        val name = "Bluetooth"
+        return when (input.bluetoothOn) {
+            null -> Entry(Item.BLUETOOTH, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
+            true -> Entry(Item.BLUETOOTH, name, Status.NG, "ON", tier = Tier.LIMIT)
+            false -> Entry(Item.BLUETOOTH, name, Status.OK, "OFF", tier = Tier.LIMIT)
+        }
     }
 
     private fun darkThemeEntry(input: Input): Entry {
@@ -331,11 +392,28 @@ object SavingChecklist {
         val name = "タッチ時のバイブ"
         return when {
             input.hapticEnabled == null ->
-                Entry(Item.HAPTIC_FEEDBACK, name, Status.UNKNOWN, "確認中")
+                Entry(Item.HAPTIC_FEEDBACK, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
             input.hapticEnabled ->
-                Entry(Item.HAPTIC_FEEDBACK, name, Status.NG, "ON")
+                Entry(Item.HAPTIC_FEEDBACK, name, Status.NG, "ON", tier = Tier.LIMIT)
             else ->
-                Entry(Item.HAPTIC_FEEDBACK, name, Status.OK, "OFF")
+                Entry(Item.HAPTIC_FEEDBACK, name, Status.OK, "OFF", tier = Tier.LIMIT)
+        }
+    }
+
+    /**
+     * Data saver (v0.3.17, limit tier): the platform reports the
+     * restriction state for this app — ENABLED (saver on, this app
+     * restricted) and WHITELISTED (saver on, this app exempted)
+     * both mean the device's data saver is in force, so both are
+     * OK; DISABLED means the saver is off, which on this tier is
+     * NG. The row exists only when the status could be read.
+     */
+    private fun dataSaverEntry(input: Input): Entry {
+        val name = "データセーバー"
+        return when (input.dataSaverRestricted) {
+            null -> Entry(Item.DATA_SAVER, name, Status.UNKNOWN, "確認中", tier = Tier.LIMIT)
+            true -> Entry(Item.DATA_SAVER, name, Status.OK, "ON", tier = Tier.LIMIT)
+            false -> Entry(Item.DATA_SAVER, name, Status.NG, "OFF", tier = Tier.LIMIT)
         }
     }
 

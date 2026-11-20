@@ -20,8 +20,10 @@ class SavingChecklistTest {
         canWriteSettings = true,
         // v0.3.16 rows, all in their fine state: radios off, dark
         // theme on, haptics off. NFC hardware absent and the mobile
-        // data value unreadable, so those two rows are omitted;
-        // Bluetooth off, so no advice row either.
+        // data value unreadable, so those two rows are omitted.
+        // Since v0.3.17 Bluetooth off is a scored OK row on the
+        // limit tier, and the data saver value is unreadable here,
+        // so that row is omitted too.
         wifiEnabled = false,
         wifiConnected = null,
         locationEnabled = false,
@@ -346,23 +348,138 @@ class SavingChecklistTest {
         assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
     }
 
-    // ---- Bluetooth (advice only: never judged, never scored) ----
+    // ---- Bluetooth (v0.3.17: judged on the limit tier) ----
 
-    @Test fun bluetoothOff_noRow() {
-        val items = SavingChecklist.evaluate(baseInput()).map { it.item }
-        assertEquals(false, items.contains(SavingChecklist.Item.BLUETOOTH))
+    @Test fun bluetoothOff_isOkOnLimitTier() {
+        val e = entry(baseInput(), SavingChecklist.Item.BLUETOOTH)
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("OFF", e.valueText)
+        assertEquals(SavingChecklist.Tier.LIMIT, e.tier)
     }
 
-    @Test fun bluetoothUnreadable_noRow() {
-        val items = SavingChecklist.evaluate(baseInput().copy(bluetoothOn = null)).map { it.item }
-        assertEquals(false, items.contains(SavingChecklist.Item.BLUETOOTH))
-    }
-
-    @Test fun bluetoothOn_isInfoRowOutsideScore() {
+    @Test fun bluetoothOn_isNgAndScoresOnLimitTier() {
         val e = entry(baseInput().copy(bluetoothOn = true), SavingChecklist.Item.BLUETOOTH)
-        assertEquals(SavingChecklist.Status.INFO, e.status)
-        assertEquals(false, e.countsTowardScore)
+        assertEquals(SavingChecklist.Status.NG, e.status)
         assertEquals("ON", e.valueText)
+        assertEquals(true, e.countsTowardScore)
+        assertEquals(SavingChecklist.Tier.LIMIT, e.tier)
+    }
+
+    @Test fun bluetoothUnreadable_isUnknownNotDropped() {
+        val e = entry(baseInput().copy(bluetoothOn = null), SavingChecklist.Item.BLUETOOTH)
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+        assertEquals("確認中", e.valueText)
+    }
+
+    // ---- Data saver (v0.3.17, limit tier; row only when read) ----
+
+    @Test fun dataSaverUnreadable_omitsRow() {
+        val items = SavingChecklist.evaluate(baseInput()).map { it.item }
+        assertEquals(false, items.contains(SavingChecklist.Item.DATA_SAVER))
+    }
+
+    @Test fun dataSaverRestricted_isOk() {
+        val e = entry(
+            baseInput().copy(dataSaverReadable = true, dataSaverRestricted = true),
+            SavingChecklist.Item.DATA_SAVER,
+        )
+        assertEquals(SavingChecklist.Status.OK, e.status)
+        assertEquals("ON", e.valueText)
+        assertEquals(SavingChecklist.Tier.LIMIT, e.tier)
+    }
+
+    @Test fun dataSaverOff_isNg() {
+        val e = entry(
+            baseInput().copy(dataSaverReadable = true, dataSaverRestricted = false),
+            SavingChecklist.Item.DATA_SAVER,
+        )
+        assertEquals(SavingChecklist.Status.NG, e.status)
+        assertEquals("OFF", e.valueText)
+    }
+
+    @Test fun dataSaverReadableButNoValue_isUnknown() {
+        val e = entry(
+            baseInput().copy(dataSaverReadable = true, dataSaverRestricted = null),
+            SavingChecklist.Item.DATA_SAVER,
+        )
+        assertEquals(SavingChecklist.Status.UNKNOWN, e.status)
+    }
+
+    // ---- Tiers (v0.3.17: normal / limit split) ----
+
+    @Test fun evaluateNormal_returnsTheSevenNormalItems() {
+        val entries = SavingChecklist.evaluateNormal(baseInput())
+        assertEquals(
+            listOf(
+                SavingChecklist.Item.BRIGHTNESS,
+                SavingChecklist.Item.SCREEN_TIMEOUT,
+                SavingChecklist.Item.TEMPERATURE,
+                SavingChecklist.Item.POWER_SAVER,
+                SavingChecklist.Item.AUTO_SAVING,
+                SavingChecklist.Item.WIFI,
+                SavingChecklist.Item.DARK_THEME,
+            ),
+            entries.map { it.item },
+        )
+        assertEquals(
+            true,
+            entries.all { it.tier == SavingChecklist.Tier.NORMAL },
+        )
+    }
+
+    @Test fun evaluateLimit_returnsLimitItemsWhenAllReadable() {
+        val input = baseInput().copy(
+            mobileDataReadable = true, mobileDataEnabled = false,
+            nfcPresent = true, nfcEnabled = false,
+            dataSaverReadable = true, dataSaverRestricted = true,
+        )
+        val entries = SavingChecklist.evaluateLimit(input)
+        assertEquals(
+            listOf(
+                SavingChecklist.Item.MOBILE_DATA,
+                SavingChecklist.Item.LOCATION,
+                SavingChecklist.Item.NFC,
+                SavingChecklist.Item.BLUETOOTH,
+                SavingChecklist.Item.HAPTIC_FEEDBACK,
+                SavingChecklist.Item.DATA_SAVER,
+            ),
+            entries.map { it.item },
+        )
+        assertEquals(
+            true,
+            entries.all { it.tier == SavingChecklist.Tier.LIMIT },
+        )
+    }
+
+    @Test fun tiersDoNotOverlap() {
+        val input = baseInput().copy(
+            mobileDataReadable = true, mobileDataEnabled = true,
+            nfcPresent = true, nfcEnabled = true,
+            dataSaverReadable = true, dataSaverRestricted = false,
+        )
+        val normal = SavingChecklist.evaluateNormal(input).map { it.item }.toSet()
+        val limit = SavingChecklist.evaluateLimit(input).map { it.item }.toSet()
+        assertEquals(true, normal.intersect(limit).isEmpty())
+        // evaluate() is exactly the two tiers concatenated.
+        assertEquals(
+            SavingChecklist.evaluateNormal(input) + SavingChecklist.evaluateLimit(input),
+            SavingChecklist.evaluate(input),
+        )
+    }
+
+    @Test fun percentIsComputedPerTier() {
+        // Normal tier all fine; limit tier has two NGs out of three.
+        val input = baseInput().copy(locationEnabled = true, hapticEnabled = true)
+        assertEquals(100, SavingChecklist.percent(SavingChecklist.evaluateNormal(input)))
+        assertEquals(33, SavingChecklist.percent(SavingChecklist.evaluateLimit(input)))
+        assertEquals(
+            "7つとも できてる",
+            SavingChecklist.summary(SavingChecklist.evaluateNormal(input)),
+        )
+        assertEquals(
+            "3つ中1つ できてる",
+            SavingChecklist.summary(SavingChecklist.evaluateLimit(input)),
+        )
     }
 
     // ---- Dark theme (OLED premise rides in the item name) ----
@@ -451,25 +568,34 @@ class SavingChecklistTest {
     // ---- Summary line ----
 
     @Test fun summaryAllOk_saysAll() {
-        assertEquals("9つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(baseInput())))
+        // 7 normal + 3 limit rows are judged in the baseline
+        // (location, Bluetooth, haptics); the unreadable rows
+        // (mobile data, NFC, data saver) are omitted, not counted.
+        assertEquals("10つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(baseInput())))
     }
 
     @Test fun summaryMixed_countsOk() {
         val input = baseInput().copy(brightness = 255, autoSavingEnabled = false)
-        assertEquals("9つ中7つ できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
+        assertEquals("10つ中8つ できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
     }
 
     @Test fun summaryWithUnknown_mentionsChecking() {
         val input = baseInput().copy(brightness = -1, brightnessAuto = null)
         assertEquals(
-            "8つ中8つ できてる（1つ確認中）",
+            "9つ中9つ できてる（1つ確認中）",
             SavingChecklist.summary(SavingChecklist.evaluate(input)),
         )
     }
 
-    @Test fun summaryIgnoresInfoRow() {
-        val input = baseInput().copy(bluetoothOn = true)
-        assertEquals("9つとも できてる", SavingChecklist.summary(SavingChecklist.evaluate(input)))
+    @Test fun summaryIgnoresNonScoringRow() {
+        // The non-scoring mechanism itself stays honest even though
+        // no current row uses it (Bluetooth scored until v0.3.16 as
+        // INFO; since v0.3.17 it scores on the limit tier).
+        val entries = SavingChecklist.evaluate(baseInput()) + SavingChecklist.Entry(
+            SavingChecklist.Item.BLUETOOTH, "Bluetooth",
+            SavingChecklist.Status.INFO, "ON", countsTowardScore = false,
+        )
+        assertEquals("10つとも できてる", SavingChecklist.summary(entries))
     }
 
     // ---- Timeout formatting ----
@@ -482,6 +608,8 @@ class SavingChecklistTest {
     }
 
     @Test fun evaluate_returnsScoredItemsInOrder() {
+        // Normal tier first (7), then the limit tier's judged rows
+        // for the baseline (location, Bluetooth, haptics).
         val items = SavingChecklist.evaluate(baseInput()).map { it.item }
         assertEquals(
             listOf(
@@ -491,8 +619,9 @@ class SavingChecklistTest {
                 SavingChecklist.Item.POWER_SAVER,
                 SavingChecklist.Item.AUTO_SAVING,
                 SavingChecklist.Item.WIFI,
-                SavingChecklist.Item.LOCATION,
                 SavingChecklist.Item.DARK_THEME,
+                SavingChecklist.Item.LOCATION,
+                SavingChecklist.Item.BLUETOOTH,
                 SavingChecklist.Item.HAPTIC_FEEDBACK,
             ),
             items,

@@ -13,6 +13,7 @@ import android.graphics.drawable.ShapeDrawable
 import android.graphics.drawable.shapes.OvalShape
 import android.graphics.drawable.shapes.RoundRectShape
 import android.location.LocationManager
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.net.wifi.SupplicantState
 import android.net.wifi.WifiManager
@@ -153,6 +154,21 @@ import kotlin.math.roundToLong
  * read without BLUETOOTH_CONNECT, so an ON row informs and never
  * scores. Master auto-sync was NOT adopted: its getter is enforced
  * behind READ_SYNC_SETTINGS in the system server.
+ * v0.3.17: the checklist splits into two tiers at the user's
+ * request ("通常の節電と、限界までやる節電でチェックリストを分けて").
+ * The normal card keeps the seven no-trade-off rows; the rows that
+ * cost everyday convenience (mobile data, location, NFC, Bluetooth,
+ * haptics, and the new data saver row) move to a second card,
+ * 「限界まで節電」, which exists on the home screen ONLY while the
+ * limit mode is ON — the toggle lives on the rules screen and at
+ * the foot of the normal card, both writing the same "limit_mode"
+ * preference. On the limit tier Bluetooth is judged outright (ON
+ * is NG and scores): the tier's premise is sacrificing convenience,
+ * so the advice-only treatment is retired with the split. The data
+ * saver row reads ConnectivityManager.getRestrictBackgroundStatus()
+ * — the one ConnectivityManager read that carries no permission
+ * annotation in the platform — guarded so a failed read omits the
+ * row. Each card keeps its own donut and percent.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -875,15 +891,37 @@ class MainActivity : AppCompatActivity() {
                     col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
                 }
         }
-        // Saving checklist (v0.3.15, expanded v0.3.16): under the
-        // numbers chip and the state action, so the emergency button
-        // above keeps its priority. The card is reading glass (card()
-        // with the surfaceContainer role), the rows are measured
-        // values judged by SavingChecklist, and every row taps
-        // through to the place that can change it (see onChecklistTap).
-        val checklist = checklistCard(SavingChecklist.evaluate(readChecklistInput(s)))
+        // Saving checklist (v0.3.15, expanded v0.3.16, split into
+        // two tiers in v0.3.17): under the numbers chip and the state
+        // action, so the emergency button above keeps its priority.
+        // The normal card is reading glass (card() with the
+        // surfaceContainer role) and always present; its foot carries
+        // the 「限界まで節電」 mode switch. The limit card exists ONLY
+        // while that mode is ON (the user's instruction: the limit
+        // list appears only in limit mode — no greyed-out placeholder
+        // when it is off). Rows are measured values judged by
+        // SavingChecklist, and every row taps through to the place
+        // that can change it (see onChecklistTap).
+        val checklistInput = readChecklistInput(s)
+        val limitMode = prefs.getBoolean("limit_mode", false)
+        val checklist = checklistCard(
+            SavingChecklist.evaluateNormal(checklistInput),
+            title = "節電チェック",
+            limitStyle = false,
+            footer = limitModeRow(),
+        )
         withTopMargin(checklist, CARD_GAP)
         col.addView(checklist)
+        if (limitMode) {
+            val limitCard = checklistCard(
+                SavingChecklist.evaluateLimit(checklistInput),
+                title = "限界まで節電",
+                limitStyle = true,
+                footer = null,
+            )
+            withTopMargin(limitCard, CARD_GAP)
+            col.addView(limitCard)
+        }
         // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
         return ScrollView(this).apply {
@@ -1045,11 +1083,40 @@ class MainActivity : AppCompatActivity() {
         }
         // isEnabled is one of the adapter reads that does not
         // require BLUETOOTH_CONNECT; whether anything is *connected*
-        // would require it, so Bluetooth stays advice-only.
+        // would require it. (Since v0.3.17 Bluetooth is judged on
+        // the limit tier, where that distinction is not needed.)
         val bluetoothOn: Boolean? = try {
             getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled
         } catch (e: Exception) {
             null
+        }
+        // Data saver (v0.3.17, limit tier): getRestrictBackground
+        // Status() is the one ConnectivityManager read that carries
+        // no permission annotation in the platform (the network-state
+        // reads beside it do, and stay unused). ENABLED and
+        // WHITELISTED both mean the device's data saver is in force
+        // — WHITELISTED only exempts this app — so both read as
+        // "restricted". Any failure leaves the sentinel down and the
+        // checklist omits the row rather than guessing.
+        var dataSaverReadable = false
+        var dataSaverRestricted: Boolean? = null
+        try {
+            when (
+                getSystemService(ConnectivityManager::class.java)
+                    ?.getRestrictBackgroundStatus()
+            ) {
+                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
+                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_WHITELISTED -> {
+                    dataSaverReadable = true
+                    dataSaverRestricted = true
+                }
+                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED -> {
+                    dataSaverReadable = true
+                    dataSaverRestricted = false
+                }
+            }
+        } catch (e: Exception) {
+            // Unreadable: the row is omitted (see SavingChecklist).
         }
         return SavingChecklist.Input(
             levelPercent = s.levelPercent,
@@ -1074,20 +1141,33 @@ class MainActivity : AppCompatActivity() {
             darkTheme = darkTheme,
             hapticEnabled = hapticEnabled,
             bluetoothOn = bluetoothOn,
+            dataSaverReadable = dataSaverReadable,
+            dataSaverRestricted = dataSaverRestricted,
         )
     }
 
     /**
-     * The checklist card: a head with the donut chart and its big
-     * percent (v0.3.16) beside the title and the one-line summary,
-     * then one tappable row per item. The surface is the shared
-     * card() reading glass — text sits on it, so it takes the
-     * thick, text-bearing recipe like every other reading surface.
-     * The percent is SavingChecklist.percent: judged items only,
-     * UNKNOWN and advice rows out of the denominator, and a dash in
-     * the middle when nothing could be judged at all.
+     * A checklist card (one per tier since v0.3.17): a head with the
+     * donut chart and its big percent beside the title and the
+     * one-line summary, then one tappable row per item. The surface
+     * is the shared card() reading glass — text sits on it, so it
+     * takes the thick, text-bearing recipe like every other reading
+     * surface. The percent is SavingChecklist.percent for THIS
+     * card's list only: judged items only, UNKNOWN rows out of the
+     * denominator, and a dash in the middle when nothing could be
+     * judged at all. The limit card is told apart from the normal
+     * one inside the existing roles only: its donut arc and title
+     * take the warning role (the tier is the "push harder" one);
+     * the surface, marks and row language are unchanged. [footer],
+     * when given, is appended under the rows (the normal card
+     * carries the limit-mode switch there).
      */
-    private fun checklistCard(entries: List<SavingChecklist.Entry>): MaterialCardView {
+    private fun checklistCard(
+        entries: List<SavingChecklist.Entry>,
+        title: String,
+        limitStyle: Boolean,
+        footer: View?,
+    ): MaterialCardView {
         val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
         val box = cardColumn(c)
         val percent = SavingChecklist.percent(entries)
@@ -1101,12 +1181,12 @@ class MainActivity : AppCompatActivity() {
         val donutWrap = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(donutSize, donutSize)
             contentDescription =
-                if (percent != null) "節電チェック ${percent}パーセント、$summary" else "節電チェック、$summary"
+                if (percent != null) "$title ${percent}パーセント、$summary" else "$title、$summary"
         }
         donutWrap.addView(
             DonutChartView(this).apply {
                 this.percent = percent
-                progressColor = colorCool
+                progressColor = if (limitStyle) colorWarning else colorCool
                 trackColor = themeColor(com.google.android.material.R.attr.colorSurfaceVariant)
             },
             FrameLayout.LayoutParams(donutSize, donutSize),
@@ -1129,7 +1209,13 @@ class MainActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), 0, 0, 0)
         }
-        headTexts.addView(label("節電チェック", taTitleMedium, literalColor = colorOnSurface, center = false))
+        headTexts.addView(
+            label(
+                title, taTitleMedium,
+                literalColor = if (limitStyle) colorWarning else colorOnSurface,
+                center = false,
+            ),
+        )
         headTexts.addView(
             label(summary, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false),
         )
@@ -1139,7 +1225,37 @@ class MainActivity : AppCompatActivity() {
         )
         box.addView(head)
         entries.forEach { box.addView(checklistRow(it)) }
+        if (footer != null) box.addView(footer)
         return c
+    }
+
+    /**
+     * The 「限界まで節電」 switch at the foot of the normal checklist
+     * card (v0.3.17): the same preference and the same switch part
+     * as the rules screen's row, so the two stay in sync by reading
+     * the same key. Toggling re-renders home so the limit card
+     * appears or disappears with the mode. The row keeps the rules
+     * rows' shape (label left, switch right) but lives inside the
+     * card, so its padding follows the card's rhythm.
+     */
+    private fun limitModeRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(8), dp(4), 0)
+        }
+        val tv = label("限界まで節電", taBodyLarge, literalColor = colorOnSurface, center = false)
+        row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val sw = MaterialSwitch(this).apply {
+            contentDescription = "限界まで節電"
+            isChecked = prefs.getBoolean("limit_mode", false)
+            setOnCheckedChangeListener { _, v ->
+                prefs.edit().putBoolean("limit_mode", v).apply()
+                showScreen(0)
+            }
+        }
+        row.addView(sw)
+        return row
     }
 
     /**
@@ -1168,8 +1284,11 @@ class MainActivity : AppCompatActivity() {
         val root: View = if (note == null) {
             row
         } else {
-            // Advice rows (Bluetooth) carry a second, quieter line
-            // under the value line, indented to the item name.
+            // Rows with a note carry a second, quieter line under
+            // the value line, indented to the item name. (The old
+            // Bluetooth advice row used this until v0.3.17 moved
+            // Bluetooth to the judged limit tier; the mechanism
+            // stays for any future noted row.)
             LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(row)
@@ -1278,6 +1397,10 @@ class MainActivity : AppCompatActivity() {
                 openSettingsAction(Settings.ACTION_BLUETOOTH_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
             SavingChecklist.Item.HAPTIC_FEEDBACK ->
                 openSettingsAction(Settings.ACTION_SOUND_SETTINGS, null)
+            // v0.3.17: the data saver's switch lives on the data
+            // usage screen (the same destination as mobile data).
+            SavingChecklist.Item.DATA_SAVER ->
+                openSettingsAction(Settings.ACTION_DATA_USAGE_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS)
         }
     }
 
@@ -1363,6 +1486,12 @@ class MainActivity : AppCompatActivity() {
         // Haptic feedback for the home face's motion (v0.3.5, user request;
         // default ON). Same switch part and persistence as the others.
         col.addView(switchRow("触覚フィードバック", "haptics", true))
+        // Limit mode (v0.3.17, default OFF): while ON, home gains the
+        // second checklist card 「限界まで節電」. The same key is written
+        // by the switch at the foot of the home checklist card, so the
+        // two toggles always agree. Nothing else on this screen depends
+        // on the key, so no re-render is needed here.
+        col.addView(switchRow("限界まで節電", "limit_mode", false))
         return ScrollView(this).apply { addView(col) }
     }
 
