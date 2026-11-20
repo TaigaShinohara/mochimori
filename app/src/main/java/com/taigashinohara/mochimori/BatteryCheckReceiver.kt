@@ -33,6 +33,12 @@ class BatteryCheckReceiver : BroadcastReceiver() {
         WidgetUpdater.updateAll(context)
         if (!snap.levelKnown) return
 
+        // Remaining-time history (v0.3.13): every check leaves one
+        // (time, level, charging) sample for the pace estimate. The
+        // store is SharedPreferences, so it survives reboots without
+        // any BOOT permission; recording resumes with the checker.
+        BatteryHistory.record(context, snap)
+
         // --- Notifications (R2) ---
         // 80%: once per charging session. The flag clears when unplugged or
         // when the level drops below 75%, so the next session notifies again.

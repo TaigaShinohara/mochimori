@@ -34,6 +34,7 @@ import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.navigation.NavigationBarView
 import com.google.android.material.progressindicator.LinearProgressIndicator
+import kotlin.math.roundToLong
 
 /**
  * M3 shell (v0.3.0): Top App Bar + content + Navigation Bar, all colours
@@ -97,6 +98,17 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
  * small glass pill chip (GlassDrawable.chip; same fold behaviour, same
  * secondary label — worst-case contrast ≈5.8:1 light / ≈5.2:1 dark).
  * The face itself, the judgement and every other screen are unchanged.
+ * v0.3.13: the numbers fold gains the remaining-time estimate and the
+ * battery-health lines (DESIGN §10), at the user's request. The drain
+ * pace is measured from a persistent (time, level, charging) history
+ * the periodic checker records (BatteryHistory / BatteryPace); until
+ * the history supports a number the line says 計測中. Charging shows
+ * the platform's computeChargeTimeRemaining() only when it returns a
+ * value. Health shows only what the device reports — health state,
+ * cycle count (API 34+, when filled), an estimated full-charge
+ * capacity labelled 推定 — and never a degradation percentage (the
+ * design capacity is not readable). The old level × 18h estimate is
+ * retired: BatteryJudge no longer carries it.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -292,6 +304,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun refresh() {
         snap = BatterySnapshot.read(this)
+        // App opens are also sampling moments for the remaining-time
+        // history (v0.3.13); BatteryHistory itself drops records that
+        // add no information, so frequent refreshes stay cheap.
+        snap?.let { BatteryHistory.record(this, it) }
     }
 
     private fun judge(): BatteryJudge.Result {
@@ -767,28 +783,57 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Numbers are folded away by default; the toggle names what is inside
-        // (audit M-2). The rough estimate lives here now (audit R-7).
-        val estText = if (result.state != BatteryJudge.State.UNKNOWN) {
-            if (result.estimatedHours >= 1f) {
-                "目安 約${"%.0f".format(result.estimatedHours)}時間"
+        // (audit M-2). Since v0.3.13 the fold also carries the remaining-time
+        // estimate and the battery-health lines (DESIGN §10). Everything
+        // here is measured or labelled 目安/推定; anything the device does
+        // not report is omitted, never padded out.
+        //
+        // Remaining time: discharging is estimated from the recorded
+        // history's drain pace (BatteryPace) — until the history can
+        // support a number it honestly says 計測中. This replaces the
+        // old level × 18h rule of thumb (audit R-7's line), which was a
+        // guess. Charging uses the platform's own
+        // computeChargeTimeRemaining() when it returns a value, and
+        // shows nothing when it does not.
+        val remainingText: String? = when {
+            result.state == BatteryJudge.State.UNKNOWN -> null
+            s.charging -> if (s.chargeTimeRemainingMs > 0) {
+                "満充電まで${BatteryPace.formatDuration((s.chargeTimeRemainingMs / 60000.0).roundToLong())}（目安）"
             } else {
-                "目安 約${"%.0f".format(result.estimatedHours * 60)}分"
+                null
             }
-        } else {
-            null
+            else -> {
+                val minutes = BatteryPace.estimateMinutesToEmpty(BatteryHistory.load(this))
+                if (minutes != null) {
+                    "あと${BatteryPace.formatDuration(minutes)}で0%（目安）"
+                } else {
+                    "0%までの時間は計測中"
+                }
+            }
         }
-        val detailsText = listOfNotNull(
-            estText,
-            "残量 ${if (s.levelKnown) "${s.levelPercent}%" else "—"}" +
-                " ・ 温度 ${if (s.tempKnown) "${"%.1f".format(s.tempC)}℃" else "—"}" +
-                " ・ 明るさ ${if (s.brightness >= 0) "${s.brightness}/255" else "—"}",
-        ).joinToString(" ・ ")
+        val numbersText = "残量 ${if (s.levelKnown) "${s.levelPercent}%" else "—"}" +
+            " ・ 温度 ${if (s.tempKnown) "${"%.1f".format(s.tempC)}℃" else "—"}" +
+            " ・ 明るさ ${if (s.brightness >= 0) "${s.brightness}/255" else "—"}" +
+            if (s.voltageMv > 0) " ・ 電圧 ${"%.2f".format(s.voltageMv / 1000f)}V" else ""
+        // Health lines: only what this device actually reported.
+        // No design capacity is readable by a general app, so no
+        // degradation percentage is ever derived or shown.
+        val healthLines = listOfNotNull(
+            BatteryHealth.healthLabel(s.health)?.let { "電池の健康 $it" },
+            if (s.cycleCount >= 0) "サイクル数 約${s.cycleCount}回" else null,
+            BatteryHealth.estimatedFullCapacityMah(s.chargeCounterMicroAh, s.levelPercent)
+                ?.let { "満充電容量 約${"%,d".format(it)}mAh（推定）" },
+        )
         col.addView(glassChip(if (detailsOpen) "数値を閉じる" else "数値を見る") {
             detailsOpen = !detailsOpen
             showScreen(0)
         })
         if (detailsOpen) {
-            col.addView(label(detailsText, taBodySmall, literalColor = colorOnSurfaceVariant))
+            listOfNotNull(remainingText, numbersText)
+                .plus(healthLines)
+                .forEach { line ->
+                    col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
+                }
         }
         // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
