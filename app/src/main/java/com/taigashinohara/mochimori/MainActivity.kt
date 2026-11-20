@@ -6,13 +6,17 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.ShapeDrawable
+import android.graphics.drawable.shapes.OvalShape
 import android.graphics.drawable.shapes.RoundRectShape
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -31,6 +35,7 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.color.MaterialColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.navigation.NavigationBarView
 import kotlin.math.roundToLong
@@ -117,6 +122,18 @@ import kotlin.math.roundToLong
  * estimate depends on (BatteryHistory / BatteryPace) is untouched,
  * as are the periodic check and the widget. Screen indices shift:
  * rules is now screen 1.
+ * v0.3.15: a saving checklist joins the home screen, at the user's
+ * request ("節電できてるかどうかはチェックリストで見れるように").
+ * A reading-glass card under the numbers fold lists five measured
+ * items — brightness, screen-off timeout, temperature, power saver,
+ * this app's auto-saving — each judged by SavingChecklist against the
+ * same thresholds the face uses, with a one-line "Nつ中Mつ できてる"
+ * summary at its head. Values that cannot be read stay 「確認中」.
+ * Tapping an item goes somewhere useful: display settings for
+ * brightness / timeout, the battery-saver settings for the power
+ * saver, the rules screen for auto-saving, the permission flow when
+ * the auto-saving row is waiting on it, and a short cooling-how-to
+ * dialog for temperature (no settings screen exists for heat).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -839,6 +856,15 @@ class MainActivity : AppCompatActivity() {
                     col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
                 }
         }
+        // Saving checklist (v0.3.15, user request): under the numbers
+        // chip and the state action, so the emergency button above
+        // keeps its priority. The card is reading glass (card() with
+        // the surfaceContainer role), the rows are measured values
+        // judged by SavingChecklist, and every row taps through to
+        // the place that can change it (see onChecklistTap).
+        val checklist = checklistCard(SavingChecklist.evaluate(readChecklistInput(s)))
+        withTopMargin(checklist, CARD_GAP)
+        col.addView(checklist)
         // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
         return ScrollView(this).apply {
@@ -873,6 +899,186 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "最初に1回だけ、設定変更の許可が必要です", Toast.LENGTH_LONG).show()
             requestWriteSettings()
         }
+    }
+
+    // ---------- Saving checklist (v0.3.15) ----------
+
+    /**
+     * Assemble the checklist's measured inputs. The battery facts come
+     * from the snapshot the home screen already read; the three values
+     * the snapshot does not carry (brightness mode, screen-off
+     * timeout, power-save mode) are read here, each with its own
+     * "could not read" sentinel so SavingChecklist can stay honest
+     * (UNKNOWN -> 「確認中」) instead of guessing. Reading settings
+     * needs no permission beyond what the app already uses.
+     */
+    private fun readChecklistInput(s: BatterySnapshot): SavingChecklist.Input {
+        val cr = contentResolver
+        val brightnessAuto: Boolean? = try {
+            Settings.System.getInt(cr, Settings.System.SCREEN_BRIGHTNESS_MODE) ==
+                Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+        } catch (e: Settings.SettingNotFoundException) {
+            null
+        }
+        val timeoutMs = try {
+            Settings.System.getInt(cr, Settings.System.SCREEN_OFF_TIMEOUT)
+        } catch (e: Settings.SettingNotFoundException) {
+            -1
+        }
+        val powerSave: Boolean? = try {
+            getSystemService(PowerManager::class.java)?.isPowerSaveMode
+        } catch (e: Exception) {
+            null
+        }
+        return SavingChecklist.Input(
+            levelPercent = s.levelPercent,
+            levelKnown = s.levelKnown,
+            charging = s.charging,
+            tempC = s.tempC,
+            tempKnown = s.tempKnown,
+            brightness = s.brightness,
+            brightnessAuto = brightnessAuto,
+            screenOffTimeoutMs = timeoutMs,
+            powerSaveMode = powerSave,
+            autoSavingEnabled = prefs.getBoolean("auto_saving", true),
+            canWriteSettings = s.canWriteSettings,
+            saverThresholdPercent = 30,
+        )
+    }
+
+    /**
+     * The checklist card: title + one-line summary at the head, then
+     * one tappable row per item. The surface is the shared card()
+     * reading glass — text sits on it, so it takes the thick,
+     * text-bearing recipe like every other reading surface.
+     */
+    private fun checklistCard(entries: List<SavingChecklist.Entry>): MaterialCardView {
+        val c = card(com.google.android.material.R.attr.colorSurfaceContainer)
+        val box = cardColumn(c)
+        box.addView(label("節電チェック", taTitleMedium, literalColor = colorOnSurface, center = false))
+        box.addView(
+            label(
+                SavingChecklist.summary(entries), taBodyMedium,
+                literalColor = colorOnSurfaceVariant, center = false,
+            ),
+        )
+        entries.forEach { box.addView(checklistRow(it)) }
+        return c
+    }
+
+    /**
+     * One checklist row: status mark + item name + measured value on
+     * a single line, 48dp tall, with the theme's selectable ripple.
+     * The value stays onSurfaceVariant in every state — body text
+     * never takes the warning colour (audit M-1); the mark carries
+     * the status, by shape as well as colour.
+     */
+    private fun checklistRow(entry: SavingChecklist.Entry): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            val tv = TypedValue()
+            if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                setBackgroundResource(tv.resourceId)
+            }
+            isClickable = true
+            isFocusable = true
+            contentDescription = "${entry.name} ${entry.valueText}"
+            setOnClickListener { onChecklistTap(entry) }
+        }
+        row.addView(checkMark(entry.status))
+        val name = label(entry.name, taBodyLarge, literalColor = colorOnSurface, center = false).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), 0, dp(8), 0)
+        }
+        row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(label(entry.valueText, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false))
+        return row
+    }
+
+    /**
+     * Status mark: a glyph in a small filled circle, distinguished by
+     * shape AND colour (✓ in the cool role, ！ in the warning role,
+     * ？ in the surface-variant role) so the meaning never rides on
+     * colour alone. The circle fill is the matching container colour
+     * and the glyph its role colour — large-symbol contrast in both
+     * schemes.
+     */
+    private fun checkMark(status: SavingChecklist.Status): TextView {
+        val (glyph, fill, fg) = when (status) {
+            SavingChecklist.Status.OK -> Triple(
+                "✓",
+                themeColor(R.attr.colorMochiStateCoolContainer),
+                colorCool,
+            )
+            SavingChecklist.Status.NG -> Triple(
+                "！",
+                themeColor(R.attr.colorMochiWarningContainer),
+                colorWarning,
+            )
+            SavingChecklist.Status.UNKNOWN -> Triple(
+                "？",
+                themeColor(com.google.android.material.R.attr.colorSurfaceVariant),
+                colorOnSurfaceVariant,
+            )
+        }
+        return TextView(this).apply {
+            text = glyph
+            setTextAppearance(taLabelLarge)
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(fg)
+            gravity = Gravity.CENTER
+            background = ShapeDrawable(OvalShape()).apply { paint.color = fill }
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+        }
+    }
+
+    /**
+     * Where a row tap goes: the settings screen that owns the value,
+     * the rules screen for this app's own toggle, the permission flow
+     * when the auto-saving row is waiting on it, and a how-to dialog
+     * for temperature — heat has no settings screen, so the honest
+     * destination is an explanation (the same cooling advice the
+     * home HEAT line gives, spelled out).
+     */
+    private fun onChecklistTap(entry: SavingChecklist.Entry) {
+        when (entry.item) {
+            SavingChecklist.Item.BRIGHTNESS, SavingChecklist.Item.SCREEN_TIMEOUT ->
+                openDisplaySettings()
+            SavingChecklist.Item.TEMPERATURE -> showCoolingDialog()
+            SavingChecklist.Item.POWER_SAVER -> openBatterySaverSettings()
+            SavingChecklist.Item.AUTO_SAVING ->
+                if (entry.status == SavingChecklist.Status.UNKNOWN) {
+                    // The row's UNKNOWN exists only for the missing
+                    // WRITE_SETTINGS permission (see SavingChecklist).
+                    requestWriteSettings()
+                } else {
+                    showScreen(1)
+                }
+        }
+    }
+
+    private fun openDisplaySettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_DISPLAY_SETTINGS))
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        }
+    }
+
+    private fun showCoolingDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("電池を冷ますには")
+            .setMessage(
+                "・重いアプリ（ゲーム・動画）を閉じる\n" +
+                    "・充電しながらの使用を控える\n" +
+                    "・ケースを外して、涼しい場所で休ませる",
+            )
+            .setPositiveButton("わかった", null)
+            .show()
     }
 
     // ---------- Rules ----------
