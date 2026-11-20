@@ -169,6 +169,25 @@ import kotlin.math.roundToLong
  * — the one ConnectivityManager read that carries no permission
  * annotation in the platform — guarded so a failed read omits the
  * row. Each card keeps its own donut and percent.
+ * v0.3.18: information reorganisation of the home and rules
+ * screens, at the user's word ("どこに何があるか分かりづらい。整理
+ * しよう"); the audit is docs/INFO_REORG_REVIEW_v0.3.17.md. No
+ * function, judgement or item is removed — elements move and gain
+ * group headings only. Home is now strictly "look and fix" in
+ * importance order: face → state label and reason → the state's
+ * fix → the checklist cards → the numbers fold LAST (it sat above
+ * the checklist until now, breaking the look → fix flow, F-1).
+ * Inside the fold, two headed groups separate "what is ahead and
+ * the battery's health" from "the raw measured values" (F-2), so
+ * the checklist (verdicts) and the numbers (detail values) no
+ * longer blur into each other (F-4). The limit-mode switch lives
+ * on the rules screen ONLY: home's card foot carries a guide row
+ * naming where the switch lives, tapping through to rules (F-3).
+ * Rules gains group headings — the stages keep their title and
+ * their master switch joins them, then 通知 / 触覚 / チェック
+ * リスト / 許可 — and a permission group showing the
+ * WRITE_SETTINGS state with the existing request flow as its
+ * entrance (F-5, F-6).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -187,6 +206,7 @@ class MainActivity : AppCompatActivity() {
     private val taHeadline = com.google.android.material.R.style.TextAppearance_Material3_HeadlineMedium
     private val taTitleLarge = com.google.android.material.R.style.TextAppearance_Material3_TitleLarge
     private val taTitleMedium = com.google.android.material.R.style.TextAppearance_Material3_TitleMedium
+    private val taTitleSmall = com.google.android.material.R.style.TextAppearance_Material3_TitleSmall
     private val taBodyLarge = com.google.android.material.R.style.TextAppearance_Material3_BodyLarge
     private val taBodyMedium = com.google.android.material.R.style.TextAppearance_Material3_BodyMedium
     private val taBodySmall = com.google.android.material.R.style.TextAppearance_Material3_BodySmall
@@ -532,6 +552,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Small group heading inside the home numbers fold (v0.3.18,
+     * audit F-2): TitleSmall in the tertiary role — the art
+     * direction's structural colour for headings — centred like
+     * everything else in the home column. The fold's lines stay
+     * BodySmall; the heading is what tells the reader which of the
+     * fold's two kinds of information a line belongs to.
+     */
+    private fun foldHeading(text: String): TextView {
+        val tv = label(text, taTitleSmall, literalColor = colorTertiary)
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        lp.topMargin = dp(12)
+        tv.layoutParams = lp
+        return tv
+    }
+
+    /**
      * Card used only where a contained group is meaningful — since
      * v0.3.8 a Simple Glass surface (see GlassDrawable): the neutral
      * surface-container card becomes reading glass (white 62%→54%
@@ -838,8 +876,46 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Numbers are folded away by default; the toggle names what is inside
-        // (audit M-2). Since v0.3.13 the fold also carries the remaining-time
+        // Saving checklist (v0.3.15, expanded v0.3.16, split into
+        // two tiers in v0.3.17): directly under the state action, so
+        // the emergency button above keeps its priority and the
+        // "look → fix" flow runs face → verdicts → fixes without the
+        // detail fold cutting in — the numbers fold moved below the
+        // checklist in v0.3.18 (audit F-1). The normal card is
+        // reading glass (card() with the surfaceContainer role) and
+        // always present; its foot carries the guide row to the
+        // rules screen, where the limit-mode switch now lives alone
+        // (v0.3.18, audit F-3). The limit card exists ONLY while
+        // that mode is ON (the user's instruction: the limit list
+        // appears only in limit mode — no greyed-out placeholder
+        // when it is off). Rows are measured values judged by
+        // SavingChecklist, and every row taps through to the place
+        // that can change it (see onChecklistTap).
+        val checklistInput = readChecklistInput(s)
+        val limitMode = prefs.getBoolean("limit_mode", false)
+        val checklist = checklistCard(
+            SavingChecklist.evaluateNormal(checklistInput),
+            title = "節電チェック",
+            limitStyle = false,
+            footer = limitGuideRow(),
+        )
+        withTopMargin(checklist, CARD_GAP)
+        col.addView(checklist)
+        if (limitMode) {
+            val limitCard = checklistCard(
+                SavingChecklist.evaluateLimit(checklistInput),
+                title = "限界まで節電",
+                limitStyle = true,
+                footer = null,
+            )
+            withTopMargin(limitCard, CARD_GAP)
+            col.addView(limitCard)
+        }
+
+        // Numbers are folded away by default, and the fold comes
+        // LAST on the home screen (v0.3.18, audit F-1); the toggle
+        // names what is inside (audit M-2). Since v0.3.13 the fold
+        // also carries the remaining-time
         // estimate and the battery-health lines (DESIGN §10). Everything
         // here is measured or labelled 目安/推定; anything the device does
         // not report is omitted, never padded out.
@@ -885,42 +961,24 @@ class MainActivity : AppCompatActivity() {
             showScreen(0)
         })
         if (detailsOpen) {
-            listOfNotNull(remainingText, numbersText)
-                .plus(healthLines)
-                .forEach { line ->
+            // Two headed groups (v0.3.18, audit F-2): the remaining
+            // time and the battery's health in one group, the raw
+            // measured values in the other, so a line is found by its
+            // group instead of by reading every line. The items are
+            // unchanged; a group whose lines are all absent shows no
+            // heading either. This is also what separates the fold
+            // from the checklist above (audit F-4): the checklist
+            // carries verdicts (✓/！ marks), the fold carries detail
+            // values and outlook, and the headings say so.
+            val timeAndHealth = listOfNotNull(remainingText).plus(healthLines)
+            if (timeAndHealth.isNotEmpty()) {
+                col.addView(foldHeading("残り時間と健康状態"))
+                timeAndHealth.forEach { line ->
                     col.addView(label(line, taBodySmall, literalColor = colorOnSurfaceVariant))
                 }
-        }
-        // Saving checklist (v0.3.15, expanded v0.3.16, split into
-        // two tiers in v0.3.17): under the numbers chip and the state
-        // action, so the emergency button above keeps its priority.
-        // The normal card is reading glass (card() with the
-        // surfaceContainer role) and always present; its foot carries
-        // the 「限界まで節電」 mode switch. The limit card exists ONLY
-        // while that mode is ON (the user's instruction: the limit
-        // list appears only in limit mode — no greyed-out placeholder
-        // when it is off). Rows are measured values judged by
-        // SavingChecklist, and every row taps through to the place
-        // that can change it (see onChecklistTap).
-        val checklistInput = readChecklistInput(s)
-        val limitMode = prefs.getBoolean("limit_mode", false)
-        val checklist = checklistCard(
-            SavingChecklist.evaluateNormal(checklistInput),
-            title = "節電チェック",
-            limitStyle = false,
-            footer = limitModeRow(),
-        )
-        withTopMargin(checklist, CARD_GAP)
-        col.addView(checklist)
-        if (limitMode) {
-            val limitCard = checklistCard(
-                SavingChecklist.evaluateLimit(checklistInput),
-                title = "限界まで節電",
-                limitStyle = true,
-                footer = null,
-            )
-            withTopMargin(limitCard, CARD_GAP)
-            col.addView(limitCard)
+            }
+            col.addView(foldHeading("いまの数値"))
+            col.addView(label(numbersText, taBodySmall, literalColor = colorOnSurfaceVariant))
         }
         // Bottom spacer of the 3:4 pair (see the top spacer, v0.3.11).
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 4f))
@@ -1160,7 +1218,8 @@ class MainActivity : AppCompatActivity() {
      * take the warning role (the tier is the "push harder" one);
      * the surface, marks and row language are unchanged. [footer],
      * when given, is appended under the rows (the normal card
-     * carries the limit-mode switch there).
+     * carries the guide row to the rules screen there — the
+     * limit-mode switch itself moved to rules alone in v0.3.18).
      */
     private fun checklistCard(
         entries: List<SavingChecklist.Entry>,
@@ -1230,31 +1289,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * The 「限界まで節電」 switch at the foot of the normal checklist
-     * card (v0.3.17): the same preference and the same switch part
-     * as the rules screen's row, so the two stay in sync by reading
-     * the same key. Toggling re-renders home so the limit card
-     * appears or disappears with the mode. The row keeps the rules
-     * rows' shape (label left, switch right) but lives inside the
-     * card, so its padding follows the card's rhythm.
+     * Guide row at the foot of the normal checklist card (v0.3.18,
+     * audit F-3): until v0.3.17 this foot carried a second
+     * 「限界まで節電」 switch, duplicating the rules screen's — one
+     * setting in two places, and a "decide" control on the "look
+     * and fix" screen. The switch now lives on the rules screen
+     * only. In its place the card's foot carries a quiet guide line
+     * that names where the switch lives and taps through to it:
+     * the reach is the same 1 tap the switch itself had, and the
+     * mode's state is still visible right here — the limit card
+     * below exists exactly while the mode is ON.
      */
-    private fun limitModeRow(): View {
+    private fun limitGuideRow(): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
             setPadding(dp(4), dp(8), dp(4), 0)
-        }
-        val tv = label("限界まで節電", taBodyLarge, literalColor = colorOnSurface, center = false)
-        row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val sw = MaterialSwitch(this).apply {
-            contentDescription = "限界まで節電"
-            isChecked = prefs.getBoolean("limit_mode", false)
-            setOnCheckedChangeListener { _, v ->
-                prefs.edit().putBoolean("limit_mode", v).apply()
-                showScreen(0)
+            val tv = TypedValue()
+            if (theme.resolveAttribute(android.R.attr.selectableItemBackground, tv, true)) {
+                setBackgroundResource(tv.resourceId)
             }
+            isClickable = true
+            isFocusable = true
+            contentDescription = "限界まで節電はルールで切り替え"
+            setOnClickListener { showScreen(1) }
         }
-        row.addView(sw)
+        val tv = label(
+            "限界まで節電はルールで切り替え", taBodyMedium,
+            literalColor = colorSecondary, center = false,
+        )
+        row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(label("›", taTitleMedium, literalColor = colorOnSurfaceVariant, center = false))
         return row
     }
 
@@ -1477,22 +1543,98 @@ class MainActivity : AppCompatActivity() {
             withTopMargin(c, CARD_GAP)
             col.addView(c)
         }
+        // The auto-saving switch sits with its stage cards (v0.3.18,
+        // audit F-5): it is the stages' master switch, not a peer of
+        // the notification switches further down.
         col.addView(switchRow("自動節電", "auto_saving", true))
         // The fixed "30%（固定）" row was removed (audit R-2): the stage card
         // "節電 30%以下" already says it. The trailing "設定はこの4つだけ"
         // note was removed with it (audit R-3).
+        // Group: notifications (grouped with headings in v0.3.18,
+        // audit F-5 — until now the five switches stood in one
+        // undifferentiated column).
+        col.addView(groupHeading("通知"))
         col.addView(switchRow("80%充電の通知", "notify_80", true))
         col.addView(switchRow("発熱の通知", "notify_heat", true))
-        // Haptic feedback for the home face's motion (v0.3.5, user request;
-        // default ON). Same switch part and persistence as the others.
+        // Group: haptics. Haptic feedback for the home face's motion
+        // (v0.3.5, user request; default ON). Same switch part and
+        // persistence as the others.
+        col.addView(groupHeading("触覚"))
         col.addView(switchRow("触覚フィードバック", "haptics", true))
-        // Limit mode (v0.3.17, default OFF): while ON, home gains the
-        // second checklist card 「限界まで節電」. The same key is written
-        // by the switch at the foot of the home checklist card, so the
-        // two toggles always agree. Nothing else on this screen depends
-        // on the key, so no re-render is needed here.
+        // Group: checklist. Limit mode (v0.3.17, default OFF): while
+        // ON, home gains the second checklist card 「限界まで節電」.
+        // Since v0.3.18 this switch lives ONLY here (audit F-3):
+        // the foot of home's checklist card carries a guide row
+        // pointing here instead of a second switch. Nothing else on
+        // this screen depends on the key, so no re-render is needed
+        // here. The one-line note under the switch says what the
+        // mode does where it happens (home) — without it, the
+        // switch's effect is invisible from this screen.
+        col.addView(groupHeading("チェックリスト"))
         col.addView(switchRow("限界まで節電", "limit_mode", false))
+        col.addView(
+            label(
+                "ONにすると、ホームに「限界まで節電」チェックリストが出ます",
+                taBodySmall, literalColor = colorOnSurfaceVariant, center = false,
+            ),
+        )
+        // Group: permission (v0.3.18, audit F-6). The WRITE_SETTINGS
+        // permission gates auto-saving, so its state and entrance
+        // belong on this "decide" screen too — until now they lived
+        // only in onboarding and on home's NEED_PERMISSION button.
+        col.addView(groupHeading("許可"))
+        col.addView(permissionRow())
         return ScrollView(this).apply { addView(col) }
+    }
+
+    /**
+     * Group heading on the rules screen (v0.3.18, audit F-5):
+     * TitleMedium in the tertiary role — the catalog's 小見出し
+     * language, the same structural colour as this screen's
+     * TitleLarge page title — with one ACTION_GAP of air above it,
+     * so the switch column reads as named groups instead of one
+     * undifferentiated list.
+     */
+    private fun groupHeading(text: String): View {
+        val tv = label(text, taTitleMedium, literalColor = colorTertiary, center = false)
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        lp.topMargin = dp(ACTION_GAP)
+        tv.layoutParams = lp
+        return tv
+    }
+
+    /**
+     * The WRITE_SETTINGS permission's state and entrance, in the
+     * rules screen's 許可 group (v0.3.18, audit F-6): a switch-row
+     * shape — name on the left, state on the right. Granted shows
+     * a quiet state word; not granted shows the text-button part
+     * wired to the same request flow onboarding and home use.
+     * This is a second entrance to an existing flow, not a new
+     * capability: the permission itself, and what it unlocks, are
+     * unchanged.
+     */
+    private fun permissionRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, dp(12)) // same rhythm as switchRow
+        }
+        val tv = label("設定の変更", taBodyLarge, literalColor = colorOnSurface, center = false)
+        row.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        if (Settings.System.canWrite(this)) {
+            row.addView(
+                label("許可済み", taBodyMedium, literalColor = colorOnSurfaceVariant, center = false),
+            )
+        } else {
+            val b = textButton("許可する") { requestWriteSettings() }
+            b.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            row.addView(b)
+        }
+        return row
     }
 
     private data class StageUi(
