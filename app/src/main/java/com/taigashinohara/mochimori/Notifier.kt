@@ -10,11 +10,18 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 
-/** Real notifications for the 80%-charge and heat events (R2). */
+/** Real notifications for the 80%-charge and heat events (R2),
+ *  and the user's own level alerts (v0.3.22). All share the one
+ *  channel: they are the same kind of quiet heads-up. */
 object Notifier {
     const val CHANNEL_ID = "mochimori_alerts"
     private const val ID_CHARGE_80 = 1001
     private const val ID_HEAT = 1002
+
+    // Level alerts get one notification id per threshold (1101..
+    // 1199), so several thresholds crossed between two checks each
+    // keep their own notification instead of overwriting one.
+    private const val ID_LEVEL_BASE = 1100
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -59,6 +66,20 @@ object Notifier {
             "充電 $levelPercent% になりました",
             "ここで抜くと電池が長持ちします",
             android.R.drawable.ic_lock_idle_charging,
+        )
+    }
+
+    /**
+     * A user-chosen level threshold was reached while discharging
+     * (v0.3.22). Same quiet tone as the other alerts: state the
+     * fact, then the current level.
+     */
+    fun notifyLevel(context: Context, thresholdPercent: Int, levelPercent: Int) {
+        post(
+            context, ID_LEVEL_BASE + thresholdPercent,
+            "残量が ${thresholdPercent}% になりました",
+            "いまの残量は ${levelPercent}% です",
+            android.R.drawable.ic_lock_idle_low_battery,
         )
     }
 

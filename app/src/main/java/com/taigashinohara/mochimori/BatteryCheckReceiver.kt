@@ -54,6 +54,33 @@ class BatteryCheckReceiver : BroadcastReceiver() {
                 prefs.edit().putBoolean("notified_80_session", false).apply()
             }
         }
+        // Level alerts (v0.3.22): the user's own thresholds from
+        // the rules screen. The selection IS the setting — an
+        // empty selection means no alerts. LevelAlerts owns the
+        // fire-once / re-arm state machine; this receiver only
+        // loads and persists its state. Judged at this check's
+        // cadence, so a notification can lag the actual crossing
+        // by up to ~15 min (the rules screen says so).
+        val levelThresholds = prefs.getStringSet(PREF_LEVEL_ALERT_VALUES, emptySet())
+            .orEmpty().mapNotNull { it.toIntOrNull() }.toSet()
+        if (levelThresholds.isNotEmpty()) {
+            val firedBefore = prefs.getStringSet(PREF_LEVEL_ALERT_FIRED, emptySet())
+                .orEmpty().mapNotNull { it.toIntOrNull() }.toSet()
+            val decision = LevelAlerts.evaluate(
+                levelThresholds, firedBefore, snap.levelPercent, snap.charging,
+            )
+            decision.toNotify.forEach { threshold ->
+                Notifier.notifyLevel(context, threshold, snap.levelPercent)
+            }
+            if (decision.firedAfter != firedBefore) {
+                prefs.edit()
+                    .putStringSet(
+                        PREF_LEVEL_ALERT_FIRED,
+                        decision.firedAfter.map { it.toString() }.toSet(),
+                    )
+                    .apply()
+            }
+        }
         // Heat: at most once per hour.
         if (snap.tempKnown && snap.tempC >= BatteryJudge.HOT_TEMP_C &&
             prefs.getBoolean("notify_heat", true)
@@ -77,6 +104,12 @@ class BatteryCheckReceiver : BroadcastReceiver() {
     }
 
     companion object {
+        /** Rules-screen selection of level-alert thresholds (v0.3.22). */
+        const val PREF_LEVEL_ALERT_VALUES = "level_alert_values"
+
+        /** Thresholds that already fired in this discharge run. */
+        const val PREF_LEVEL_ALERT_FIRED = "level_alert_fired"
+
         const val ACTION_CHECK = "com.taigashinohara.mochimori.ACTION_PERIODIC_CHECK"
         const val INTERVAL_MS = 15 * 60 * 1000L
 

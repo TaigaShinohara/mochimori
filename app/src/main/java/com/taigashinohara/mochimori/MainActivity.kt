@@ -35,6 +35,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
@@ -242,6 +244,20 @@ import kotlin.math.roundToLong
  * OFF (the v0.3.9 real-device decision): a deliberate, documented
  * departure from the M3 default. No function, judgement, item or
  * permission changes.
+ * v0.3.22: two additions at the user's request. (1) Level alerts:
+ * the rules 通知 group gains a threshold picker — preset Filter
+ * Chips (50/40/30/20/10%) plus user-added values from a slider
+ * dialog, shown as removable Input Chips — and the periodic
+ * checker notifies once per chosen threshold while discharging
+ * (LevelAlerts owns the fire-once / re-arm state machine; the
+ * ~15-min check cadence means a notification can lag the crossing,
+ * and the setting says so). The 80% and heat notifications are
+ * unchanged, and all alerts share the one channel. (2) A third
+ * tab, コツ: a reading-only tips screen about charging — phone-to-
+ * phone power sharing (USB-C cable and wireless reverse charging,
+ * model-dependent), faster charging, and gentler charging — built
+ * from the same standard card/row parts as the rules stages. No
+ * new permission; the home no-scroll default state is untouched.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -307,6 +323,12 @@ class MainActivity : AppCompatActivity() {
         // the shared CARD_PAD_V like every other card.
         const val CHECK_ROW_H = 48
         const val CHECK_DONUT = 52
+
+        // Level-alert presets (v0.3.22): the values offered as
+        // Filter Chips on the rules screen. Any other value the
+        // user adds stands beside them as an Input Chip; the
+        // stored selection does not distinguish the two.
+        val LEVEL_ALERT_PRESETS = listOf(50, 40, 30, 20, 10)
     }
 
     private fun themeColor(attr: Int): Int = MaterialColors.getColor(this, attr, Color.BLACK)
@@ -372,6 +394,7 @@ class MainActivity : AppCompatActivity() {
                 showScreen(
                     when (item.itemId) {
                         R.id.nav_rules -> 1
+                        R.id.nav_tips -> 2
                         else -> 0
                     },
                 )
@@ -437,6 +460,7 @@ class MainActivity : AppCompatActivity() {
         // Keep the Navigation Bar selection in sync without re-entering the listener.
         val targetId = when (index) {
             1 -> R.id.nav_rules
+            2 -> R.id.nav_tips
             else -> R.id.nav_home
         }
         if (bottomNav.selectedItemId != targetId) {
@@ -447,6 +471,7 @@ class MainActivity : AppCompatActivity() {
         setContent(
             when (index) {
                 1 -> buildRules()
+                2 -> buildTips()
                 else -> buildHome()
             },
         )
@@ -1660,6 +1685,12 @@ class MainActivity : AppCompatActivity() {
         col.addView(groupHeading("通知"))
         col.addView(switchRow("80%充電の通知", "notify_80", true))
         col.addView(switchRow("発熱の通知", "notify_heat", true))
+        // Level alerts (v0.3.22, user request: notify at a remaining
+        // level of the user's choosing). The selection itself is the
+        // setting — no master switch; nothing selected, no alerts.
+        // Firing and re-arming are LevelAlerts' job, driven by the
+        // periodic checker (BatteryCheckReceiver).
+        col.addView(levelAlertSection())
         // Group: haptics. Haptic feedback for the home face's motion
         // (v0.3.5, user request; default ON). Same switch part and
         // persistence as the others.
@@ -1767,5 +1798,236 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(sw)
         return row
+    }
+
+    // ---------- Level alerts (v0.3.22) ----------
+
+    /** The user's chosen level-alert thresholds, as stored by the checker. */
+    private fun levelAlertValues(): Set<Int> =
+        prefs.getStringSet(BatteryCheckReceiver.PREF_LEVEL_ALERT_VALUES, emptySet())
+            .orEmpty().mapNotNull { it.toIntOrNull() }.toSet()
+
+    private fun setLevelAlertValue(value: Int, selected: Boolean) {
+        val next = levelAlertValues().toMutableSet()
+        if (selected) next.add(value) else next.remove(value)
+        prefs.edit()
+            .putStringSet(
+                BatteryCheckReceiver.PREF_LEVEL_ALERT_VALUES,
+                next.map { it.toString() }.toSet(),
+            )
+            .apply()
+        showScreen(1)
+    }
+
+    /**
+     * The level-alert picker in the rules 通知 group (v0.3.22):
+     * a label, one ChipGroup, and the honest lag note. Preset
+     * values are M3 Filter Chips (multi-select); values the user
+     * added themselves stand beside them as Input Chips whose
+     * close icon removes them; the last chip opens the slider
+     * dialog that adds a new value. Every change persists at once
+     * and re-renders this screen, the same pattern the switches
+     * use. The lag note sits right under the setting, as with the
+     * auto profile's interval note: judgement runs at the ~15-min
+     * check, so the notification can arrive late — said here,
+     * briefly, where the choice is made.
+     */
+    private fun levelAlertSection(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, 0) // switchRow rhythm
+        }
+        col.addView(
+            label("残量の通知", taBodyLarge, literalColor = colorOnSurface, center = false),
+        )
+        val selected = levelAlertValues()
+        val group = ChipGroup(this).apply {
+            isSingleSelection = false
+        }
+        LEVEL_ALERT_PRESETS.forEach { v ->
+            group.addView(
+                Chip(this).apply {
+                    text = "${v}%"
+                    isCheckable = true
+                    isChecked = v in selected
+                    setOnCheckedChangeListener { _, checked -> setLevelAlertValue(v, checked) }
+                },
+            )
+        }
+        selected.filter { it !in LEVEL_ALERT_PRESETS }.sortedDescending().forEach { v ->
+            group.addView(
+                Chip(this).apply {
+                    text = "${v}%"
+                    isCloseIconVisible = true
+                    contentDescription = "残量 ${v}% の通知"
+                    setOnCloseIconClickListener { setLevelAlertValue(v, false) }
+                },
+            )
+        }
+        group.addView(
+            Chip(this).apply {
+                text = "＋ 自分で決める"
+                setOnClickListener { showCustomLevelDialog() }
+            },
+        )
+        val groupLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        groupLp.topMargin = dp(8)
+        col.addView(group, groupLp)
+        val note = label(
+            "チェックは約15分ごとのため、通知は残量に届いてから少し遅れることがあります",
+            taBodySmall, literalColor = colorOnSurfaceVariant, center = false,
+        )
+        val noteLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        noteLp.topMargin = dp(8)
+        col.addView(note, noteLp)
+        return col
+    }
+
+    /**
+     * Add-a-value dialog for the level alerts (v0.3.22): an M3
+     * Slider (5–95%, in 5% steps) with the value it points at.
+     * Picking a preset value here simply selects that preset —
+     * the stored set does not care how a value arrived.
+     */
+    private fun showCustomLevelDialog() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(8), dp(24), 0)
+        }
+        val valueLabel = label("25%", taTitleLarge, literalColor = colorOnSurface)
+        container.addView(valueLabel)
+        val slider = com.google.android.material.slider.Slider(this).apply {
+            valueFrom = 5f
+            valueTo = 95f
+            stepSize = 5f
+            value = 25f
+            addOnChangeListener { _, v, _ -> valueLabel.text = "${v.toInt()}%" }
+        }
+        container.addView(slider)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("通知する残量")
+            .setView(container)
+            .setPositiveButton("追加") { _, _ ->
+                setLevelAlertValue(slider.value.toInt(), true)
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // ---------- Tips (v0.3.22) ----------
+
+    private data class TipUi(val title: String, val body: String)
+
+    /**
+     * The tips screen (third tab, コツ; v0.3.22, user request):
+     * reading material about charging, built from the same parts
+     * as the rules stages — a page title, group headings, and one
+     * standard card per group holding title/body rows divided by
+     * hairlines. Nothing here operates the device: no settings
+     * links, no switches. The phone-to-phone procedures are spelled
+     * out in the body text itself.
+     *
+     * Content discipline: only well-established facts, phrased at
+     * the strength the platform documentation supports. Anything
+     * model-dependent (wireless reverse charging above all) says
+     * so in its own text instead of promising it works everywhere.
+     */
+    private fun buildTips(): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(PAGE_PAD_H), dp(16), dp(PAGE_PAD_H), dp(16))
+        }
+        col.addView(label("充電のコツ", taTitleLarge, literalColor = colorOnSurface, center = false))
+        col.addView(
+            label(
+                "意外と知らない給電の方法と、電池にやさしい充電のしかた",
+                taBodyMedium, literalColor = colorOnSurfaceVariant, center = false,
+            ),
+        )
+        val groups: List<Pair<String, List<TipUi>>> = listOf(
+            "スマホから給電する" to listOf(
+                TipUi(
+                    "スマホ同士をケーブルでつなぐ",
+                    "USB-C ケーブルで2台をつなぐと、片方からもう片方へ充電できます。" +
+                        "給電したい側のスマホで、接続時の通知から USB の設定を開き、「接続先のデバイスを充電」をONにします。" +
+                        "逆向きに充電されることもあるので、残量の減り方で向きを確認してください。",
+                ),
+                TipUi(
+                    "ワイヤレスで分け合う（逆充電）",
+                    "対応機種では、背面に置くだけでイヤホンや他のスマホを充電できます。" +
+                        "Pixel では「バッテリーシェア」という名前で、設定のバッテリーからONにします。" +
+                        "対応していない機種では使えません。充電はゆっくりで、位置がずれると止まります。",
+                ),
+                TipUi(
+                    "車・パソコン・タブレットからも",
+                    "車の USB ポートやノートパソコン、タブレットの USB-C からも給電できます。" +
+                        "コンセントの充電器よりゆっくりですが、充電器がない時の助けになります。",
+                ),
+            ),
+            "速く充電する" to listOf(
+                TipUi(
+                    "機内モード・電源OFFが速い",
+                    "通信を止めると充電中の消費が減るぶん、実質的に速くたまります。" +
+                        "急ぐ時は機内モード、使わない時は電源を切って充電すると効果的です。",
+                ),
+                TipUi(
+                    "充電器とケーブルで速さが変わる",
+                    "急速充電は、対応した充電器とケーブルの組み合わせで初めて効きます。" +
+                        "規格の合わない安価なケーブルでは遅くなることがあり、安全のためにも規格品を選んでください。",
+                ),
+            ),
+            "電池を長持ちさせる" to listOf(
+                TipUi(
+                    "20〜80%の範囲がやさしい",
+                    "満充電や空に近い状態が長く続くと、電池は劣化しやすくなります。" +
+                        "日常的には残量20〜80%の範囲で使うのが目安です。" +
+                        "機種によっては充電の上限を80%に止める設定もあります。",
+                ),
+                TipUi(
+                    "熱がいちばんの大敵",
+                    "充電しながらのゲームや動画など重い操作は、発熱と劣化のもとです。" +
+                        "急速充電やワイヤレス充電も熱を持ちやすいので、急がない時は通常のケーブル充電が穏やかです。" +
+                        "熱いと感じたら、ケースを外して休ませてください。",
+                ),
+                TipUi(
+                    "100%のままつなぎっぱなしにしない",
+                    "満充電のまま長時間つないでおくのも電池には負担です。" +
+                        "夜間の充電では、アラームに合わせて満充電のタイミングを調整する「最適化充電」（Pixel のアダプティブ充電など）を使うと安心です。",
+                ),
+            ),
+        )
+        groups.forEach { (heading, tips) ->
+            col.addView(groupHeading(heading))
+            val c = card()
+            val box = cardColumn(c)
+            tips.forEachIndexed { i, tip ->
+                if (i > 0) {
+                    box.addView(
+                        View(this).apply {
+                            setBackgroundColor(
+                                themeColor(com.google.android.material.R.attr.colorOutlineVariant),
+                            )
+                        },
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)),
+                    )
+                }
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, dp(12), 0, dp(12))
+                }
+                row.addView(label(tip.title, taTitleMedium, literalColor = colorOnSurface, center = false))
+                val body = label(tip.body, taBodyMedium, literalColor = colorOnSurface, center = false)
+                body.setPadding(0, dp(4), 0, 0)
+                row.addView(body)
+                box.addView(row)
+            }
+            withTopMargin(c, CARD_GAP)
+            col.addView(c)
+        }
+        return ScrollView(this).apply { addView(col) }
     }
 }
