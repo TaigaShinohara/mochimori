@@ -209,28 +209,47 @@ class HeatSceneTest {
     }
 
     @Test fun liquidColorHitsTheAnchors() {
+        // v0.3.29 eased curve: the anchors sit at heat 0 (cool),
+        // 0.75 (peach) and 1 (hot).
         assertEquals(0xFF5EA9DD.toInt(), HeatScene.liquidColor(0f))
-        assertEquals(0xFFF0A868.toInt(), HeatScene.liquidColor(0.5f))
+        assertEquals(0xFFF0A868.toInt(), HeatScene.liquidColor(0.75f))
         assertEquals(0xFFD42A1E.toInt(), HeatScene.liquidColor(1f))
         // Out-of-range heats clamp to the anchors.
         assertEquals(0xFF5EA9DD.toInt(), HeatScene.liquidColor(-0.5f))
         assertEquals(0xFFD42A1E.toInt(), HeatScene.liquidColor(1.5f))
     }
 
+    @Test fun liquidColorStaysCoolWhileHeatIsLow() {
+        // The v0.3.29 fix: at heat ≈ 0.17 (one NG out of six
+        // judged — the case on the user's real-device screenshot)
+        // the old linear mix already tinted the liquid peach and
+        // it read grey. The eased curve holds the cool anchor for
+        // the whole low-heat zone, up to heat 0.35.
+        assertEquals(0xFF5EA9DD.toInt(), HeatScene.liquidColor(0.17f))
+        assertEquals(0xFF5EA9DD.toInt(), HeatScene.liquidColor(0.35f))
+    }
+
     @Test fun liquidColorMidpointsSitBetweenTheAnchors() {
         fun channels(argb: Int) = intArrayOf(
             (argb shr 16) and 0xFF, (argb shr 8) and 0xFF, argb and 0xFF,
         )
-        // Quarter heat: halfway between the cool and mid anchors.
-        val quarter = channels(HeatScene.liquidColor(0.25f))
+        // Heat 0.55 is the smoothstep midpoint of the cool →
+        // peach zone (0.35…0.75): halfway between the anchors.
+        val midCoolPeach = channels(HeatScene.liquidColor(0.55f))
         val coolMidMean = intArrayOf((0x5E + 0xF0) / 2, (0xA9 + 0xA8) / 2, (0xDD + 0x68) / 2)
-        // Three-quarter heat: halfway between mid and hot.
-        val threeQuarter = channels(HeatScene.liquidColor(0.75f))
+        // Heat 0.875 is the smoothstep midpoint of the peach →
+        // hot zone (0.75…1): halfway between mid and hot.
+        val midPeachHot = channels(HeatScene.liquidColor(0.875f))
         val midHotMean = intArrayOf((0xF0 + 0xD4) / 2, (0xA8 + 0x2A) / 2, (0x68 + 0x1E) / 2)
         for (i in 0..2) {
-            assertTrue(abs(quarter[i] - coolMidMean[i]) <= 2)
-            assertTrue(abs(threeQuarter[i] - midHotMean[i]) <= 2)
+            assertTrue(abs(midCoolPeach[i] - coolMidMean[i]) <= 2)
+            assertTrue(abs(midPeachHot[i] - midHotMean[i]) <= 2)
         }
+        // Half heat is past the hold zone but still clearly on
+        // the blue side of the cool–peach midpoint.
+        val half = channels(HeatScene.liquidColor(0.5f))
+        assertTrue(half[0] < coolMidMean[0])
+        assertTrue(half[2] > coolMidMean[2])
         // Alpha is always opaque.
         assertEquals(0xFF, HeatScene.liquidColor(0.25f) ushr 24)
     }
