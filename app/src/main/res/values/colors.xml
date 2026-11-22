@@ -36,17 +36,19 @@
     <color name="m3_onError">#FFFFFF</color>
     <color name="m3_errorContainer">#FCE7F1</color>
     <color name="m3_onErrorContainer">#5F0A2C</color>
-    <!-- Surfaces (soft blue-white) -->
-    <color name="m3_background">#F7FAFC</color>
+    <!-- Surfaces (white ground since v0.3.23, design plan E "minimal
+         white": the ground is plain white and the container tones
+         below carry what little hierarchy the surfaces need) -->
+    <color name="m3_background">#FFFFFF</color>
     <color name="m3_onBackground">#10222E</color>
-    <color name="m3_surface">#F7FAFC</color>
+    <color name="m3_surface">#FFFFFF</color>
     <color name="m3_onSurface">#10222E</color>
     <color name="m3_surfaceVariant">#E1EBF2</color>
     <color name="m3_onSurfaceVariant">#3F5462</color>
     <color name="m3_outline">#6E8391</color>
     <color name="m3_outlineVariant">#C3D2DC</color>
     <color name="m3_surfaceDim">#D5E0E8</color>
-    <color name="m3_surfaceBright">#F7FAFC</color>
+    <color name="m3_surfaceBright">#FFFFFF</color>
     <color name="m3_surfaceContainerLowest">#FFFFFF</color>
     <color name="m3_surfaceContainerLow">#EFF5F9</color>
     <color name="m3_surfaceContainer">#E8F1F7</color>

@@ -12,7 +12,6 @@ import android.graphics.Shader
 import android.view.ContextThemeWrapper
 import androidx.core.graphics.ColorUtils
 import com.google.android.material.color.MaterialColors
-import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -27,8 +26,8 @@ import kotlin.math.sin
  * colours, frozen at a representative phase:
  *  - the liquid surface is a gentle still wave (no tilt, no splash,
  *    no particles — a widget frame is honest about being a still),
- *  - flames stand upright (phase 0), crystals sit where the live face
- *    puts them, the bolt appears only while charging,
+ *  - the simple face (dot eyes + mouth) is drawn with its eyes open,
+ *    the bolt appears only while charging,
  *  - bubbles are a few fixed seeds inside the liquid.
  * State comes from [BatteryJudge] via the caller — this renderer never
  * judges anything itself.
@@ -36,6 +35,11 @@ import kotlin.math.sin
  * v0.3.21: the still follows the live face's M3 flattening — solid
  * shell and outline, no aura, ground shadow, gloss, rim, cavity
  * shading, bolt glow or flake halo (see BatteryFaceView's doc).
+ *
+ * v0.3.23: the still follows the live face's simple-face redesign —
+ * the flames and crystals are retired here too, and the character's
+ * dot eyes and mouth (smile / open oval / flat line, by state) are
+ * drawn over the body, exactly as on the home screen.
  */
 object WidgetFaceRenderer {
 
@@ -92,9 +96,6 @@ object WidgetFaceRenderer {
             Kind.UNKNOWN -> Triple(neutral, neutralFill, neutralFill)
         }
         val cavity = ColorUtils.blendARGB(cavityBase, accent, 0.10f)
-        val hotOuter = ColorUtils.blendARGB(hot, Color.rgb(0xBF, 0x36, 0x00), 0.45f)
-        val hotInner = ColorUtils.blendARGB(hot, Color.WHITE, 0.35f)
-        val hotCore = ColorUtils.blendARGB(hot, Color.rgb(0xFF, 0xF3, 0xB0), 0.75f)
 
         // ---- Geometry (mirrors BatteryFaceView.onSizeChanged) ----
         val topZone = 34f
@@ -131,22 +132,6 @@ object WidgetFaceRenderer {
 
         // No aura and no ground shadow (removed in v0.3.21, with the
         // live face).
-
-        // ---- Flames behind the body (hot face, frozen at phase 0) ----
-        if (kind == Kind.HOT) {
-            val baseY = body.top + u(7f)
-            val maxH = (baseY - u(6f)).coerceAtLeast(u(20f))
-            fun fh(frac: Float) = min(maxH, maxH * frac)
-            // The bed: one wide, low flame mound the others rise from.
-            flameLayer(canvas, fill, body.centerX(), baseY + u(4f), bodyW * 0.46f, fh(0.36f), 0f, hotOuter)
-            // Five standing flames, centre highest — same envelope and
-            // per-flame phases as the live face, frozen.
-            flameFull(canvas, fill, body.centerX() - bodyW * 0.36f, baseY + u(5f), bodyW * 0.105f, fh(0.55f), 4.1f, hotOuter, hot, hotInner, hotCore)
-            flameFull(canvas, fill, body.centerX() + bodyW * 0.36f, baseY + u(5f), bodyW * 0.105f, fh(0.55f), 1.3f, hotOuter, hot, hotInner, hotCore)
-            flameFull(canvas, fill, body.centerX() - bodyW * 0.185f, baseY + u(3f), bodyW * 0.125f, fh(0.78f), 2.4f, hotOuter, hot, hotInner, hotCore)
-            flameFull(canvas, fill, body.centerX() + bodyW * 0.185f, baseY + u(3f), bodyW * 0.125f, fh(0.78f), 5.3f, hotOuter, hot, hotInner, hotCore)
-            flameFull(canvas, fill, body.centerX(), baseY, bodyW * 0.145f, fh(1.0f), 0f, hotOuter, hot, hotInner, hotCore)
-        }
 
         // ---- Body: the container colour as an opaque solid (v0.3.21) ----
         fill.color = container
@@ -252,52 +237,55 @@ object WidgetFaceRenderer {
         stroke.strokeWidth = u(4.5f)
         canvas.drawRoundRect(body, radius, radius, stroke)
 
-        // ---- State marks ----
+        // ---- Charging bolt (the charging state's marker) ----
+        if (kind == Kind.CHARGING) {
+            bolt(canvas, fill, stroke, body, accent, onAccent, u)
+        }
+
+        // ---- The simple face (v0.3.23): dot eyes + mouth ----
+        // The same marks as the live face, frozen with the eyes
+        // open: a calm smile while saving or charging, a small
+        // open mouth while not saving, a flat line while unknown.
+        // Drawn last, over the cavity and the liquid, in the state
+        // colour deepened toward black — the live face's rule.
+        val faceColor = ColorUtils.blendARGB(accent, Color.BLACK, 0.45f)
+        fill.color = faceColor
+        fill.alpha = 242
+        val cx = body.centerX()
+        val eyeR = u(3.4f)
+        val eyeY = body.top + body.height() * 0.17f
+        val eyeDX = body.width() * 0.155f
+        for (side in -1..1 step 2) {
+            canvas.drawCircle(cx + side * eyeDX, eyeY, eyeR, fill)
+        }
+        val mouthY = body.top + body.height() * 0.28f
         when (kind) {
-            Kind.SAVING -> crystals(canvas, stroke, body, accent, u)
-            Kind.CHARGING -> {
-                crystals(canvas, stroke, body, accent, u)
-                bolt(canvas, fill, stroke, body, accent, onAccent, u)
+            Kind.SAVING, Kind.CHARGING -> {
+                val mw = u(16f); val mh = u(11f)
+                stroke.color = faceColor
+                stroke.alpha = 242
+                stroke.strokeWidth = u(2.4f)
+                canvas.drawArc(
+                    cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f,
+                    25f, 130f, false, stroke,
+                )
+                stroke.alpha = 255
             }
-            else -> Unit
-        }
-    }
-
-    /** Snowflakes balanced around the body — same layout as the live face. */
-    private fun crystals(canvas: Canvas, paint: Paint, body: RectF, color: Int, u: (Float) -> Float) {
-        val l = body.left; val t = body.top
-        val bw = body.width(); val bh = body.height()
-        snowflake(canvas, paint, l - bw * 0.16f, t + bh * 0.02f, u(13f), color, 235)
-        snowflake(canvas, paint, l + bw * 1.16f, t + bh * 0.02f, u(11f), color, 235)
-        snowflake(canvas, paint, l - bw * 0.20f, t + bh * 0.42f, u(8.5f), color, 200)
-        snowflake(canvas, paint, l + bw * 1.20f, t + bh * 0.55f, u(7.5f), color, 200)
-        snowflake(canvas, paint, l + bw * 0.26f, t + bh * 0.22f, u(7f), color, 110)
-        snowflake(canvas, paint, l + bw * 0.74f, t + bh * 0.68f, u(6f), color, 110)
-    }
-
-    private fun snowflake(canvas: Canvas, paint: Paint, cx: Float, cy: Float, r: Float, color: Int, alpha: Int) {
-        val path = Path()
-        val branches = floatArrayOf(0.52f, 0.34f, 0.78f, 0.24f)
-        for (i in 0 until 6) {
-            val a = Math.toRadians((i * 60 - 90).toDouble())
-            val ux = cos(a).toFloat(); val uy = sin(a).toFloat()
-            path.moveTo(cx, cy)
-            path.lineTo(cx + ux * r, cy + uy * r)
-            for (b in branches.indices step 2) {
-                val at = branches[b]; val lenF = branches[b + 1]
-                val bx = cx + ux * r * at; val by = cy + uy * r * at
-                for (s in -1..1 step 2) {
-                    val ba = a + s * Math.toRadians(42.0)
-                    path.moveTo(bx, by)
-                    path.lineTo(bx + cos(ba).toFloat() * r * lenF, by + sin(ba).toFloat() * r * lenF)
-                }
+            Kind.HOT -> {
+                val mw = u(7.5f); val mh = u(10f)
+                val oval = RectF(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
+                canvas.drawOval(oval, fill)
+            }
+            Kind.UNKNOWN -> {
+                val half = u(5.5f)
+                stroke.color = faceColor
+                stroke.alpha = 242
+                stroke.strokeWidth = u(2.4f)
+                canvas.drawLine(cx - half, mouthY, cx + half, mouthY, stroke)
+                stroke.alpha = 255
             }
         }
-        // Single pass (the halo under-stroke was removed in v0.3.21).
-        paint.color = ColorUtils.setAlphaComponent(color, alpha)
-        paint.strokeWidth = r * 0.13f
-        canvas.drawPath(path, paint)
-        canvas.drawCircle(cx, cy, r * 0.16f, paint)
+        fill.alpha = 255
     }
 
     /** The bolt — charging only, same proportions as the live face. */
@@ -325,46 +313,9 @@ object WidgetFaceRenderer {
         canvas.drawPath(path, stroke)
     }
 
-    /** One standing flame in four layers, frozen at phase [ph]. */
-    private fun flameFull(
-        canvas: Canvas, paint: Paint, baseCx: Float, baseY: Float,
-        halfW: Float, height: Float, ph: Float,
-        outer: Int, mid: Int, inner: Int, core: Int,
-    ) {
-        val grow = 1f + sin(ph * 2).toFloat() * 0.07f
-        flameLayer(canvas, paint, baseCx, baseY, halfW, height * grow, ph, outer)
-        flameLayer(canvas, paint, baseCx, baseY, halfW * 0.70f, height * 0.70f * grow, ph + 0.9f, mid)
-        flameLayer(canvas, paint, baseCx, baseY, halfW * 0.45f, height * 0.46f * grow, ph + 1.7f, inner)
-        flameLayer(canvas, paint, baseCx, baseY, halfW * 0.25f, height * 0.27f * grow, ph + 2.3f, core)
-    }
-
-    private fun flameLayer(
-        canvas: Canvas, paint: Paint, baseCx: Float, baseY: Float,
-        halfW: Float, height: Float, ph: Float, color: Int,
-    ) {
-        val bend = sin(ph.toDouble()).toFloat() * halfW * 0.38f
-        val wobble = sin(ph * 2 + 1.3).toFloat() * halfW * 0.13f
-        val path = Path()
-        path.moveTo(baseCx - halfW, baseY)
-        path.cubicTo(
-            baseCx - halfW * 1.08f, baseY - height * 0.36f,
-            baseCx - halfW * 0.40f + wobble, baseY - height * 0.60f,
-            baseCx + bend, baseY - height,
-        )
-        path.cubicTo(
-            baseCx + halfW * 0.46f + wobble * 0.6f, baseY - height * 0.58f,
-            baseCx + halfW * 1.08f, baseY - height * 0.36f,
-            baseCx + halfW, baseY,
-        )
-        path.cubicTo(
-            baseCx + halfW * 0.42f, baseY - height * 0.10f,
-            baseCx - halfW * 0.42f, baseY - height * 0.10f,
-            baseCx - halfW, baseY,
-        )
-        path.close()
-        paint.color = color
-        canvas.drawPath(path, paint)
-    }
+    // The crystals and flame helpers that stood here until
+    // v0.3.22 were removed in v0.3.23, with their drawings: the
+    // simple face and the liquid carry the state now.
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 }

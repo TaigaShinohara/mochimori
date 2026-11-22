@@ -244,6 +244,27 @@ import kotlin.math.roundToLong
  * OFF (the v0.3.9 real-device decision): a deliberate, documented
  * departure from the M3 default. No function, judgement, item or
  * permission changes.
+ * v0.3.23: design plan E ("ミニマル白"), chosen by the user from a
+ * second board of generated mock-ups, with the face specified by
+ * the user directly ("バッテリーをキャラにするのはいい。ただし顔
+ * は目を点にし、目と口だけのシンプルな顔がいい"). The M3 base of
+ * v0.3.21 stays; what changes is the art direction on top of it.
+ * The battery is now a character with the simplest face — two dot
+ * eyes and a mouth, drawn inside BatteryFaceView; the flames and
+ * crystals that carried the state around the body are retired,
+ * and the state rides on the liquid's colour and motion plus the
+ * mouth's shape (smile / small open mouth / flat line). The home
+ * screen follows plan E's order — big face, then the remaining
+ * level as a quiet standing line, then the state and reason — on
+ * a plain white ground (the light surface token is now #FFFFFF),
+ * with the checklist cards quieted to the M3 outlined variant
+ * (surface fill, 1dp outlineVariant hairline, whitespace doing
+ * the grouping). Rules and tips keep their content, order and
+ * wording and take the same quiet card and white ground, so all
+ * three tabs share one tone; the dark theme keeps the identical
+ * structure and hierarchy on its near-black ground. The widget's
+ * still face is the same simple face. No function, judgement,
+ * item or permission changes — appearance and layout only.
  * v0.3.22: two additions at the user's request. (1) Level alerts:
  * the rules 通知 group gains a threshold picker — preset Filter
  * Chips (50/40/30/20/10%) plus user-added values from a slider
@@ -280,6 +301,7 @@ class MainActivity : AppCompatActivity() {
 
     // M3 text appearances (type scale comes from the theme, not per-screen sizes)
     private val taHeadline = com.google.android.material.R.style.TextAppearance_Material3_HeadlineMedium
+    private val taHeadlineLarge = com.google.android.material.R.style.TextAppearance_Material3_HeadlineLarge
     private val taTitleLarge = com.google.android.material.R.style.TextAppearance_Material3_TitleLarge
     private val taTitleMedium = com.google.android.material.R.style.TextAppearance_Material3_TitleMedium
     private val taTitleSmall = com.google.android.material.R.style.TextAppearance_Material3_TitleSmall
@@ -307,8 +329,8 @@ class MainActivity : AppCompatActivity() {
         // and centres it in a taller slot. FACE_H_MIN is the fixed slot height of
         // an expanded state (a checklist open, or the numbers fold
         // open), where the lower area needs the room instead. The
-        // face's internal geometry — body proportions, flame/flake
-        // headroom, ground shadow — lives in
+        // face's internal geometry — body proportions, the cap
+        // headroom, the bottom zone — lives in
         // BatteryFaceView.bodyRectDp and scales with the slot it
         // is given.
         const val FACE_H_MAX = 320
@@ -576,20 +598,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Card used only where a contained group is meaningful — a
-     * standard M3 filled card (v0.3.21): the surfaceContainer role
-     * as an opaque fill and the Medium shape token (12dp), no
-     * elevation. Until v0.3.20 this factory dressed the card in
-     * Simple Glass (a translucent GlassDrawable child with a
-     * specular edge, 20dp corners); the M3 standardisation retired
-     * the glass, and the card is now the plain component.
+     * Card used only where a contained group is meaningful. Since
+     * v0.3.23 (design plan E, minimal white) the card is the quiet
+     * M3 outlined variant: the fill is the surface itself — the
+     * same white as the ground in the light theme, the same
+     * near-black in the dark — and the group is held together by a
+     * 1dp outlineVariant hairline and the padding inside, not by a
+     * tonal fill. The Medium shape token (12dp) and no elevation
+     * are unchanged. (v0.3.21–v0.3.22 used the filled variant with
+     * the surfaceContainer role; until v0.3.20 this factory dressed
+     * the card in Simple Glass.)
      */
     private fun card(): MaterialCardView = MaterialCardView(this).apply {
         setCardBackgroundColor(
             ColorStateList.valueOf(
-                themeColor(com.google.android.material.R.attr.colorSurfaceContainer),
+                themeColor(com.google.android.material.R.attr.colorSurface),
             ),
         )
+        strokeColor = themeColor(com.google.android.material.R.attr.colorOutlineVariant)
+        strokeWidth = dp(1)
         radius = dp(12).toFloat() // ShapeAppearance Medium token (M3 card standard)
         cardElevation = 0f
         useCompatPadding = false
@@ -786,6 +813,29 @@ class MainActivity : AppCompatActivity() {
             col.addView(face, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 20f))
         }
 
+        // The remaining level, as plan E lays it out (v0.3.23):
+        // face → level → state and reason, each on its own quiet
+        // line. The level is the same measured value the numbers
+        // fold carries — plan E promotes it to a standing line under the
+        // face, in the quiet onSurfaceVariant at HeadlineLarge, so
+        // it reads as part of the face's block without shouting
+        // over the state label below it. An unreadable level shows
+        // a dash, never a guessed number.
+        val percentLabel = label(
+            if (s.levelKnown) "残量 ${s.levelPercent}%" else "残量 —",
+            taHeadlineLarge, literalColor = colorOnSurfaceVariant,
+        )
+        percentLabel.setPadding(0, 0, 0, 0)
+        col.addView(
+            percentLabel,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                // Pulled 8dp up into the face slot's empty bottom
+                // zone (the body's shadow zone in bodyRectDp;
+                // nothing is drawn there), the move the state label
+                // used until v0.3.22 (layout plan A, v0.3.11).
+                topMargin = dp(-8)
+            },
+        )
         val (labelText, accent) = when (result.state) {
             BatteryJudge.State.SAVING -> "節電できてる" to colorCool
             BatteryJudge.State.CHARGING -> "充電中" to colorCool
@@ -793,20 +843,12 @@ class MainActivity : AppCompatActivity() {
             BatteryJudge.State.UNKNOWN -> "確認中" to colorOnSurfaceVariant
             BatteryJudge.State.NOT_SAVING -> "節電できてない" to colorWarning
         }
-        // Label + reason pull in tighter under the face so the three
-        // read as one block (layout plan A, v0.3.11) — the state
-        // label is pulled 8dp up into the face slot's empty bottom
-        // zone (the body's shadow zone in bodyRectDp; nothing is
-        // drawn there) and the label→reason gap closes to 4dp.
-        // Both moves stay inside the spacing scale.
+        // Label + reason stay tight under the level line so face,
+        // level, state and reason read as one block — the
+        // label→reason gap is 4dp, inside the spacing scale.
         val stateLabel = label(labelText, taHeadline, literalColor = accent)
         stateLabel.setPadding(0, dp(4), 0, 0)
-        col.addView(
-            stateLabel,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(-8)
-            },
-        )
+        col.addView(stateLabel)
         // Reason: BodyLarge on onSurface. onSurfaceVariant at this size was
         // too dim to read on the dark theme (user screenshot, v0.3.4).
         // Its bottom padding is dropped (v0.3.19 density): the gap to
@@ -876,9 +918,9 @@ class MainActivity : AppCompatActivity() {
         // the emergency button above keeps its priority and the
         // "look → fix" flow runs face → verdicts → fixes without the
         // detail fold cutting in — the numbers fold moved below the
-        // checklist in v0.3.18 (audit F-1). The normal card is
-        // reading glass (card() with the surfaceContainer role) and
-        // always present; its foot carries the guide row to the
+        // checklist in v0.3.18 (audit F-1). The normal card is the
+        // shared card() (the quiet outlined variant since v0.3.23)
+        // and always present; its foot carries the guide row to the
         // rules screen, where the limit-mode switch now lives alone
         // (v0.3.18, audit F-3). The limit card exists ONLY while
         // that mode is ON (the user's instruction: the limit list
@@ -1266,7 +1308,8 @@ class MainActivity : AppCompatActivity() {
      * A checklist card (one per tier since v0.3.17): a head with the
      * donut chart and its big percent beside the title and the
      * one-line summary, then one tappable row per item. The surface
-     * is the shared card() — a standard filled card since v0.3.21.
+     * is the shared card() — a filled card in v0.3.21–v0.3.22, the
+     * quiet outlined variant since v0.3.23.
      * The percent is SavingChecklist.percent for THIS
      * card's list only: judged items only, UNKNOWN rows out of the
      * denominator, and a dash in the middle when nothing could be

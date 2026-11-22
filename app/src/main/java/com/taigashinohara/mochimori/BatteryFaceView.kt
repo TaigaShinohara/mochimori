@@ -25,7 +25,6 @@ import androidx.core.graphics.ColorUtils
 import com.google.android.material.color.MaterialColors
 import kotlin.math.abs
 import kotlin.math.atan2
-import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -123,6 +122,24 @@ import kotlin.math.tan
  * of bodyRectDp stays in the geometry (the home layout's spacing
  * was tuned with it) even though nothing is drawn in it now.
  *
+ * v0.3.23 simple face (user chose design plan E, "ミニマル白", from
+ * generated mock-ups, and instructed the face directly: "バッテリー
+ * をキャラにするのはいい。ただし顔は目を点にし、目と口だけのシン
+ * プルな顔がいい"): the battery is now a CHARACTER with the
+ * simplest possible face — two dot eyes and a mouth, nothing else.
+ * No highlights in the eyes, no brows, no cheeks. The flames and
+ * snow crystals that used to carry the state around the body are
+ * retired with it: state is now carried by the liquid's colour and
+ * motion (unchanged) plus the mouth's minimal shape change —
+ * a calm smile arc while saving or charging, a small open mouth
+ * while not saving, a short flat line while the state is unknown.
+ * The eyes blink, briefly, on the animation clock (dots squash to
+ * slits); with motion reduced they simply stay open. The bolt
+ * stays as the charging state's marker (it was never a face part:
+ * it appears only while charging, so it cannot be misread). The
+ * haptics are untouched — their pulses were always timed to the
+ * liquid's phase, not to the flames' drawing.
+ *
  * v0.3.8 liquid pass (user: "さらに滑らかに／器内をバシャバシャと"):
  * - Smoothness: the surface is sampled at 44 points and drawn as a
  *   midpoint-quadratic curve (no polyline facets), a third fine wave
@@ -144,7 +161,7 @@ import kotlin.math.tan
  *
  * Colours are resolved from the theme's fixed state roles, so Dynamic
  * Color never changes what the faces mean. State is never carried by
- * colour alone: flames vs crystals differ in shape too.
+ * colour alone: the mouth's shape and the liquid's motion differ too.
  *
  * Performance: all Paints/Paths are fields and reused; gradients are
  * built in onSizeChanged only; particles are a fixed small set computed
@@ -602,10 +619,8 @@ class BatteryFaceView @JvmOverloads constructor(
         context, com.google.android.material.R.attr.colorSurfaceContainerHigh, Color.rgb(0xDF, 0xEA, 0xF2),
     )
 
-    // Derived shades (computed once).
-    private val hotOuter = ColorUtils.blendARGB(hot, Color.rgb(0xBF, 0x36, 0x00), 0.45f)
-    private val hotInner = ColorUtils.blendARGB(hot, Color.WHITE, 0.35f)
-    private val hotCore = ColorUtils.blendARGB(hot, Color.rgb(0xFF, 0xF3, 0xB0), 0.75f)
+    // Derived shades (computed once). (The flame shades that stood
+    // here until v0.3.22 were retired with the flames in v0.3.23.)
     private val capLight = ColorUtils.blendARGB(neutral, Color.WHITE, 0.65f)
     private val capMid = ColorUtils.blendARGB(neutral, Color.WHITE, 0.20f)
     private val capDark = ColorUtils.blendARGB(neutral, Color.BLACK, 0.28f)
@@ -659,7 +674,8 @@ class BatteryFaceView @JvmOverloads constructor(
 
     // ---- Paints (reused). The decorative paints of the glass era
     // (aura, shadow, gloss, rim, cavity shading, bolt glow, embers,
-    // crystal halo, sparkles) were removed in v0.3.21.
+    // crystal halo, sparkles) were removed in v0.3.21, and the flame
+    // and crystal paints went with their drawings in v0.3.23.
     private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val cavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val liquidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -675,18 +691,19 @@ class BatteryFaceView @JvmOverloads constructor(
     private val boltStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND
     }
-    private val flamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val crystalPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+    // The simple face (v0.3.23): dot eyes are filled ovals, the
+    // mouth is a stroked arc / line or a filled oval, by state.
+    private val faceFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val faceStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
     private val boltPath = Path()
-    private val flamePath = Path()
     private val wavePath = Path()
     private val edgePath = Path()
-    private val flakePath = Path()
     private val clipPath = Path()
+    private val faceRect = RectF() // scratch for the eyes and mouth
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -703,7 +720,8 @@ class BatteryFaceView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         // Upright battery (v0.3.6, user's instruction): width : height
         // ≈ 1 : 1.55, cap on TOP centre like a standing dry cell. Headroom
-        // above the body is reserved for flames / flakes, with the cap in
+        // above the body is reserved for the cap (it held the flames
+        // until v0.3.22), with the cap in
         // the middle of it; an empty zone sits below (it held the ground
         // shadow until v0.3.21 removed it; the zone stays in the
         // geometry). The rect itself
@@ -745,8 +763,8 @@ class BatteryFaceView @JvmOverloads constructor(
         contentDescription = when {
             unknownState -> "バッテリー。状態を確認中です"
             charging -> "充電中のバッテリー。残量 $levelPercent パーセント"
-            saving -> "ひんやりしたバッテリー。節電できています。残量 $levelPercent パーセント"
-            else -> "燃えさかるバッテリー。節電できていません。残量 $levelPercent パーセント"
+            saving -> "バッテリー。節電できています。残量 $levelPercent パーセント"
+            else -> "バッテリー。節電できていません。残量 $levelPercent パーセント"
         }
     }
 
@@ -810,7 +828,7 @@ class BatteryFaceView @JvmOverloads constructor(
                 lastFrameNanos = 0L
                 animator = ValueAnimator.ofFloat(0f, (2 * Math.PI).toFloat()).apply {
                     duration = when (mode) {
-                        0 -> 1500L // flames: lively
+                        0 -> 1500L // hot face: lively waves
                         1 -> 2600L // charging pulse: slow
                         else -> 6800L // cool face: one slow, quiet loop
                     }
@@ -835,9 +853,9 @@ class BatteryFaceView @JvmOverloads constructor(
     //
     // One very weak pulse per animation loop, fired at the moment the
     // motion peaks. The same phase drives the liquid's surface waves and
-    // the flames' growth, so the pulse lands on the liquid's biggest
-    // sway / the flame's grow peak:
-    //   flames (mode 0, ~1.5 s): at the flame "grow" peak (phase = π/4),
+    // the waves' growth, so the pulse lands on the liquid's biggest
+    // sway / wave peak:
+    //   hot face (mode 0, ~1.5 s): at the wave "grow" peak (phase = π/4),
     //     with a small per-loop jitter so the rhythm never feels mechanical,
     //     and a slight per-loop amplitude variation for the same reason.
     //   charging (mode 1, ~2.6 s): at the glow pulse peak (phase = π/2).
@@ -1036,30 +1054,102 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun drawFace(canvas: Canvas, kind: FaceKind) {
         val palette = paletteFor(kind)
-        val cx = bodyRect.centerX()
-        val cy = bodyRect.centerY()
-        val bodyTop = bodyRect.top
 
         // No aura and no ground shadow since v0.3.21: the battery
-        // stands on the flat surface, not floating over it.
-
-        // Flames sit behind the body so their bases tuck behind its top
-        // edge, standing up around the cap.
-        if (kind == FaceKind.HOT) {
-            drawFlames(canvas, cx, bodyTop)
-        }
-
+        // stands on the flat surface, not floating over it. Since
+        // v0.3.23 nothing stands around the body either — the
+        // flames and crystals are retired, and the character's own
+        // face (below) is the only mark on the body.
         drawBody(canvas, palette, kind)
 
-        when (kind) {
-            FaceKind.UNKNOWN -> Unit // plain grey battery, no marks
-            FaceKind.CHARGING -> {
-                drawCrystals(canvas, palette.accent)
-                drawBolt(canvas, palette)
-            }
-            FaceKind.SAVING -> drawCrystals(canvas, palette.accent)
-            FaceKind.HOT -> Unit // flames already drawn behind the body
+        // The bolt is the charging state's marker, drawn over the
+        // liquid as before (charging only — never a decoration).
+        if (kind == FaceKind.CHARGING) {
+            drawBolt(canvas, palette)
         }
+
+        drawFaceMarks(canvas, kind, palette)
+    }
+
+    // ---------------- The simple face (v0.3.23) ----------------
+    //
+    // Two dot eyes and a mouth — the whole face, at the user's
+    // direct instruction. No eye highlights, no brows, no cheeks.
+    // The marks sit in the body's upper area and are drawn last,
+    // over the cavity and the liquid alike, in the state colour
+    // deepened toward black so they stay readable over the pale
+    // liquid surface and the neutral cavity in both themes.
+    // The mouth is the only part that changes with the state:
+    //   saving / charging: a calm smile arc
+    //   not saving:        a small open mouth (a plain oval)
+    //   unknown:           a short flat line — no verdict, no face
+    //                      pretending to one
+
+    /** Vertical squash of the dot eyes: 1 open, ~0.12 mid-blink. */
+    private fun blinkScale(): Float {
+        // One blink every ~4.6 s of animation time, closed for a
+        // ~0.28 s dip shaped by a sine so it eases shut and open.
+        // splashClock only advances while the animator runs, so a
+        // still face (reduced motion, unknown state) keeps its
+        // eyes open.
+        val cycle = 4.6f
+        val t = splashClock % cycle
+        val window = 0.28f
+        if (t < cycle - window) return 1f
+        val p = (t - (cycle - window)) / window
+        return 1f - sin(p * Math.PI).toFloat() * 0.88f
+    }
+
+    private fun drawFaceMarks(canvas: Canvas, kind: FaceKind, palette: Palette) {
+        val fs = maxOf(sizeScale, 0.55f)
+        val cx = bodyRect.centerX()
+        val bodyTop = bodyRect.top
+        val bodyW = bodyRect.width()
+        val bodyH = bodyRect.height()
+        val faceColor = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.45f)
+        faceFillPaint.color = faceColor
+        faceFillPaint.alpha = 242
+        faceStrokePaint.color = faceColor
+        faceStrokePaint.alpha = 242
+
+        // Dot eyes.
+        val eyeR = dp(3.4f) * fs
+        val eyeY = bodyTop + bodyH * 0.17f
+        val eyeDX = bodyW * 0.155f
+        val squash = blinkScale()
+        for (side in -1..1 step 2) {
+            val ex = cx + side * eyeDX
+            faceRect.set(ex - eyeR, eyeY - eyeR * squash, ex + eyeR, eyeY + eyeR * squash)
+            canvas.drawOval(faceRect, faceFillPaint)
+        }
+
+        // Mouth, by state (see the section comment).
+        val mouthY = bodyTop + bodyH * 0.28f
+        when (kind) {
+            FaceKind.SAVING, FaceKind.CHARGING -> {
+                // Calm smile: the lower arc of a small ellipse.
+                val mw = dp(16f) * fs
+                val mh = dp(11f) * fs
+                faceRect.set(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
+                faceStrokePaint.strokeWidth = dp(2.4f) * fs
+                canvas.drawArc(faceRect, 25f, 130f, false, faceStrokePaint)
+            }
+            FaceKind.HOT -> {
+                // Small open mouth: a plain filled oval.
+                val mw = dp(7.5f) * fs
+                val mh = dp(10f) * fs
+                faceRect.set(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
+                canvas.drawOval(faceRect, faceFillPaint)
+            }
+            FaceKind.UNKNOWN -> {
+                // Flat line: no expression while there is no verdict.
+                val half = dp(5.5f) * fs
+                faceStrokePaint.strokeWidth = dp(2.4f) * fs
+                canvas.drawLine(cx - half, mouthY, cx + half, mouthY, faceStrokePaint)
+            }
+        }
+        faceFillPaint.alpha = 255
+        faceStrokePaint.alpha = 255
     }
 
     /**
@@ -1275,119 +1365,10 @@ class BatteryFaceView @JvmOverloads constructor(
         boltPath.close()
     }
 
-    // ---------------- Cool face: snowflakes ----------------
-
-    private fun drawCrystals(canvas: Canvas, color: Int) {
-        val l = bodyRect.left; val t = bodyRect.top
-        val bw = bodyRect.width(); val bh = bodyRect.height()
-        // Flake radii scale with the face (v0.3.19); positions are
-        // body-relative already, so the composition is unchanged.
-        val cs = maxOf(sizeScale, 0.55f)
-        // Balanced around the upright body — beside the cap, down both
-        // sides, two faint inside the shell — never bunched on top.
-        // (The twinkling sparkles that shared this space until
-        // v0.3.20 were pure decoration and are gone in v0.3.21.)
-        snowflake(canvas, l - bw * 0.16f, t + bh * 0.02f, dp(13f) * cs, color, 235)
-        snowflake(canvas, l + bw * 1.16f, t + bh * 0.02f, dp(11f) * cs, color, 235)
-        snowflake(canvas, l - bw * 0.20f, t + bh * 0.42f, dp(8.5f) * cs, color, 200)
-        snowflake(canvas, l + bw * 1.20f, t + bh * 0.55f, dp(7.5f) * cs, color, 200)
-        snowflake(canvas, l + bw * 0.26f, t + bh * 0.22f, dp(7f) * cs, color, 110)
-        snowflake(canvas, l + bw * 0.74f, t + bh * 0.68f, dp(6f) * cs, color, 110)
-    }
-
-    /** Six arms, two branch chevrons per arm, small ring at the centre. */
-    private fun snowflake(canvas: Canvas, cx: Float, cy: Float, r: Float, color: Int, alpha: Int) {
-        flakePath.reset()
-        for (i in 0 until 6) {
-            val a = Math.toRadians((i * 60 - 90).toDouble())
-            val ux = cos(a).toFloat(); val uy = sin(a).toFloat()
-            flakePath.moveTo(cx, cy)
-            flakePath.lineTo(cx + ux * r, cy + uy * r)
-            for (b in BRANCHES.indices step 2) {
-                val at = BRANCHES[b]; val lenF = BRANCHES[b + 1]
-                val bx = cx + ux * r * at; val by = cy + uy * r * at
-                for (s in -1..1 step 2) {
-                    val ba = a + s * Math.toRadians(42.0)
-                    flakePath.moveTo(bx, by)
-                    flakePath.lineTo(
-                        bx + cos(ba).toFloat() * r * lenF,
-                        by + sin(ba).toFloat() * r * lenF,
-                    )
-                }
-            }
-        }
-        // Single pass since v0.3.21: the soft halo stroke that ran
-        // under the flake (a glow, not information) is removed.
-        crystalPaint.color = ColorUtils.setAlphaComponent(color, alpha)
-        crystalPaint.strokeWidth = dp(1.7f)
-        canvas.drawPath(flakePath, crystalPaint)
-        canvas.drawCircle(cx, cy, r * 0.16f, crystalPaint)
-    }
-
-    // ---------------- Hot face: layered flames ----------------
-
-    private fun drawFlames(canvas: Canvas, cx: Float, bodyTop: Float) {
-        val baseY = bodyTop + dp(7f)
-        val bw = bodyRect.width()
-        // Flames stand from the top of the upright body, around the cap:
-        // five flames across the body's width on a centre-high envelope,
-        // over a low wide bed. Heights are capped by the headroom above
-        // the body so nothing is ever clipped by the view's top edge.
-        val maxH = (baseY - dp(6f)).coerceAtLeast(dp(20f))
-        fun h(frac: Float) = min(maxH, maxH * frac)
-        // The bed: one wide, low flame mound the others rise from.
-        flameLayer(canvas, cx, baseY + dp(4f), bw * 0.46f, h(0.36f), phase * 0.5f, hotOuter)
-        // Outer flames first (behind), then mid, then the centre flame —
-        // the centre one rises behind/around the cap.
-        flame(canvas, cx - bw * 0.36f, baseY + dp(5f), bw * 0.105f, h(0.55f), phase + 4.1f)
-        flame(canvas, cx + bw * 0.36f, baseY + dp(5f), bw * 0.105f, h(0.55f), phase + 1.3f)
-        flame(canvas, cx - bw * 0.185f, baseY + dp(3f), bw * 0.125f, h(0.78f), phase + 2.4f)
-        flame(canvas, cx + bw * 0.185f, baseY + dp(3f), bw * 0.125f, h(0.78f), phase + 5.3f)
-        flame(canvas, cx, baseY, bw * 0.145f, h(1.0f), phase)
-    }
-
-    /** One flame in four layers; each layer bends/wobbles on its own phase. */
-    private fun flame(canvas: Canvas, baseCx: Float, baseY: Float, halfW: Float, height: Float, ph: Float) {
-        val grow = 1f + sin(ph * 2).toFloat() * 0.07f
-        flameLayer(canvas, baseCx, baseY, halfW, height * grow, ph, hotOuter)
-        // Inner layers are a little wider than a thin outline, so the
-        // layering reads as thickness (kept from the v0.3.5 band pass).
-        flameLayer(canvas, baseCx, baseY, halfW * 0.70f, height * 0.70f * grow, ph + 0.9f, hot)
-        flameLayer(canvas, baseCx, baseY, halfW * 0.45f, height * 0.46f * grow, ph + 1.7f, hotInner)
-        // Bright core, only on the way up from the base.
-        flameLayer(canvas, baseCx, baseY, halfW * 0.25f, height * 0.27f * grow, ph + 2.3f, hotCore)
-    }
-
-    private fun flameLayer(
-        canvas: Canvas, baseCx: Float, baseY: Float,
-        halfW: Float, height: Float, ph: Float, color: Int,
-    ) {
-        val bend = sin(ph.toDouble()).toFloat() * halfW * 0.38f
-        val wobble = sin(ph * 2 + 1.3).toFloat() * halfW * 0.13f
-        flamePath.reset()
-        flamePath.moveTo(baseCx - halfW, baseY)
-        flamePath.cubicTo(
-            baseCx - halfW * 1.08f, baseY - height * 0.36f,
-            baseCx - halfW * 0.40f + wobble, baseY - height * 0.60f,
-            baseCx + bend, baseY - height,
-        )
-        flamePath.cubicTo(
-            baseCx + halfW * 0.46f + wobble * 0.6f, baseY - height * 0.58f,
-            baseCx + halfW * 1.08f, baseY - height * 0.36f,
-            baseCx + halfW, baseY,
-        )
-        flamePath.cubicTo(
-            baseCx + halfW * 0.42f, baseY - height * 0.10f,
-            baseCx - halfW * 0.42f, baseY - height * 0.10f,
-            baseCx - halfW, baseY,
-        )
-        flamePath.close()
-        flamePaint.color = color
-        canvas.drawPath(flamePath, flamePaint)
-    }
-
-    // The rising embers that used to float above the flames were
-    // removed in v0.3.21 (decoration; the flames carry the state).
+    // The snow crystals and layered flames that carried the state
+    // around the body until v0.3.22 were removed in v0.3.23: the
+    // simple face (dot eyes + mouth, above) and the liquid's colour
+    // and motion carry the state now. See the class doc.
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
@@ -1397,8 +1378,8 @@ class BatteryFaceView @JvmOverloads constructor(
          * size — the single source for the face's geometry (v0.3.19).
          * onSizeChanged draws from it. (The home screen's glass plate
          * mirrored it too until the plate was removed in v0.3.21.)
-         * The headroom above the body (flames / cap) and the shadow
-         * zone below scale with the slot height relative to the
+         * The headroom above the body (cap; flames until v0.3.22)
+         * and the shadow zone below scale with the slot height relative to the
          * full-size 320dp slot; at 320dp every value is exactly the
          * pre-v0.3.19 geometry (top zone 58dp, shadow zone 20dp,
          * body capped at 272dp tall and 60% of the slot wide, top
@@ -1421,8 +1402,6 @@ class BatteryFaceView @JvmOverloads constructor(
             return RectF(left, top, left + bodyW, top + bodyH)
         }
 
-        // Snowflake branch positions along each arm: (fraction, length fraction) pairs.
-        private val BRANCHES = floatArrayOf(0.52f, 0.34f, 0.78f, 0.24f)
         // Bubble counts per state: hot / charging / saving.
         private val BUBBLE_COUNTS = intArrayOf(8, 7, 3)
         private val BUBBLE_SEEDS = floatArrayOf(
