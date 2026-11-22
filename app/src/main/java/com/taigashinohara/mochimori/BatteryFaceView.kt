@@ -26,6 +26,7 @@ import com.google.android.material.color.MaterialColors
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.math.tan
@@ -140,6 +141,38 @@ import kotlin.math.tan
  * haptics are untouched — their pulses were always timed to the
  * liquid's phase, not to the flames' drawing.
  *
+ * v0.3.27 burning → cooling (user proposal, approved from the
+ * generated mock-up board v4: 「節電できてないときは燃えている。
+ * チェックリストを埋めるほど冷ますオブジェクトが増えていきバッ
+ * テリーが冷めていく」): the state expression gains a second axis —
+ * the checklist's heat, decided by the pure [HeatScene] from the
+ * normal tier's verdicts and handed in via [heatScene].
+ * - The body gains the battery read the mock-up asked for: a
+ *   metal rim band across the top of the shell, under the terminal
+ *   cap (the cap itself is unchanged).
+ * - Geometric flames stand around the body again — flat vector
+ *   shapes this time, not the layered beziers retired in v0.3.23 —
+ *   growing in number, size and redness with the heat, swaying
+ *   gently on the existing animation clock. A measurably hot
+ *   battery (temperature NG) keeps a small flame even when the
+ *   rest of the list is filled (HeatScene's honest floor).
+ * - The liquid's colour follows the heat between three
+ *   character-only anchors (pale blue → pale peach → deep red,
+ *   HeatScene.liquidColor); its bubbles run faster and more
+ *   numerous the hotter it is. The shell's container tint blends
+ *   between the cool and warning containers on the same axis.
+ * - One cooling object per OK checklist item gathers around the
+ *   body (parasol / wind chime / ice / air conditioner / fan /
+ *   shaved ice / snowman — the fixed mapping in HeatScene),
+ *   drawn as small geometric shapes, kept to the body's
+ *   neighbourhood so the plan-E minimal white around it is
+ *   untouched. The fan's blades turn slowly.
+ * - The mouth follows the heat too: a wavy trembling line when
+ *   hot, a flat line on the way, the calm smile arc when cool.
+ * Charging keeps the v0.3.23 expression untouched (no flames,
+ * cool liquid, the bolt); with no heat verdict (heat == null)
+ * everything falls back to the plain v0.3.23 face.
+ *
  * v0.3.8 liquid pass (user: "さらに滑らかに／器内をバシャバシャと"):
  * - Smoothness: the surface is sampled at 44 points and drawn as a
  *   midpoint-quadratic curve (no polyline facets), a third fine wave
@@ -202,6 +235,19 @@ class BatteryFaceView @JvmOverloads constructor(
      * view never buzzes unless the screen explicitly enables it.
      */
     var hapticsEnabled: Boolean = false
+
+    /**
+     * The burning → cooling scene (v0.3.27), decided by [HeatScene]
+     * from the normal checklist's verdicts and set by MainActivity.
+     * Null (never set) keeps the plain v0.3.23 face; a scene whose
+     * heat is null (nothing could be judged) does the same, except
+     * that its earned cooling objects still show.
+     */
+    var heatScene: HeatScene.Scene? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     private enum class FaceKind { SAVING, HOT, CHARGING, UNKNOWN }
 
@@ -541,11 +587,17 @@ class BatteryFaceView @JvmOverloads constructor(
         }
 
         // --- Bubbles ---
-        val (count, rate) = when (kind) {
-            FaceKind.HOT -> BUBBLE_COUNTS[0] to 1.4f
-            FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 0.9f
-            FaceKind.SAVING -> BUBBLE_COUNTS[2] to 0.35f
-            FaceKind.UNKNOWN -> 0 to 0f
+        // v0.3.27: while a heat verdict exists (and the face is
+        // not charging), the count and the pace follow the heat —
+        // more numerous and faster the hotter it is.
+        val heatActivity = heatScene?.takeIf { it.heat != null }?.particleActivity
+        val (count, rate) = when {
+            kind == FaceKind.UNKNOWN -> 0 to 0f
+            kind != FaceKind.CHARGING && heatActivity != null ->
+                heatBubbleCount(heatActivity) to (0.35f + 1.05f * heatActivity)
+            kind == FaceKind.HOT -> BUBBLE_COUNTS[0] to 1.4f
+            kind == FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 0.9f
+            else -> BUBBLE_COUNTS[2] to 0.35f
         }
         for (i in 0 until count) {
             val b = bubblePs[i]
@@ -626,20 +678,22 @@ class BatteryFaceView @JvmOverloads constructor(
     private val capDark = ColorUtils.blendARGB(neutral, Color.BLACK, 0.28f)
 
     /** One state's palette: everything onDraw needs, shaders built per size. */
-    private inner class Palette(val accent: Int, val container: Int, val onAccent: Int) {
+    private inner class Palette(var accent: Int, var container: Int, val onAccent: Int) {
         /**
          * Interior of the shell (the unfilled part). A neutral surface
          * with only a whisper (10%) of the state colour tinted in, in both
          * themes (v0.3.5: the state container lightened with white turned
-         * a muddy brown-grey on the dark theme).
+         * a muddy brown-grey on the dark theme). Computed per read since
+         * v0.3.27: the heat palette's accent moves with the heat, and
+         * the cavity tint must follow it.
          */
-        val cavity: Int = ColorUtils.blendARGB(cavityBase, accent, 0.10f)
+        val cavity: Int get() = ColorUtils.blendARGB(cavityBase, accent, 0.10f)
         /**
          * The bolt's fill (v0.3.21): the on-accent colour lightened
          * toward white — the value the middle stop of the old bolt
          * gradient carried, now the bolt's single flat colour.
          */
-        val boltFill: Int = ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f)
+        val boltFill: Int get() = ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f)
         var liquid: Shader? = null
         fun build(innerTop: Float, innerBottom: Float) {
             // Liquid (v0.3.6): anchored to the inner height, so whatever
@@ -666,10 +720,38 @@ class BatteryFaceView @JvmOverloads constructor(
     private val hotPalette = Palette(hot, hotFill, onHot)
     private val neutralPalette = Palette(neutral, neutralFill, neutralFill)
 
-    private fun paletteFor(kind: FaceKind): Palette = when (kind) {
-        FaceKind.SAVING, FaceKind.CHARGING -> coolPalette
-        FaceKind.HOT -> hotPalette
-        FaceKind.UNKNOWN -> neutralPalette
+    /**
+     * The heat palette (v0.3.27): while a heat verdict exists, the
+     * saving / not-saving faces take their accent from the heat
+     * (HeatScene.liquidColor — pale blue → pale peach → deep red)
+     * and their shell tint blends between the cool and warning
+     * containers on the same axis. The accent is cached so the
+     * liquid shader is rebuilt only when the colour actually moves.
+     */
+    private val heatPalette = Palette(cool, coolFill, onCool)
+    private var heatAccentCache: Int? = null
+
+    private fun paletteFor(kind: FaceKind): Palette {
+        if (kind == FaceKind.SAVING || kind == FaceKind.HOT) {
+            val heat = heatScene?.heat
+            if (heat != null) {
+                val accent = HeatScene.liquidColor(heat)
+                if (accent != heatAccentCache) {
+                    heatAccentCache = accent
+                    heatPalette.accent = accent
+                    heatPalette.container = ColorUtils.blendARGB(coolFill, hotFill, heat)
+                    if (innerRect.width() > 0f) {
+                        heatPalette.build(innerRect.top, innerRect.bottom)
+                    }
+                }
+                return heatPalette
+            }
+        }
+        return when (kind) {
+            FaceKind.SAVING, FaceKind.CHARGING -> coolPalette
+            FaceKind.HOT -> hotPalette
+            FaceKind.UNKNOWN -> neutralPalette
+        }
     }
 
     // ---- Paints (reused). The decorative paints of the glass era
@@ -697,6 +779,13 @@ class BatteryFaceView @JvmOverloads constructor(
     private val faceStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
+    // The heat expression (v0.3.27): flat geometric flames and the
+    // cooling objects are filled shapes with one quiet line colour.
+    private val flamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val objFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val objStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+    }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
     private val boltPath = Path()
@@ -704,6 +793,8 @@ class BatteryFaceView @JvmOverloads constructor(
     private val edgePath = Path()
     private val clipPath = Path()
     private val faceRect = RectF() // scratch for the eyes and mouth
+    private val flamePath = Path() // scratch for one geometric flame
+    private val objRect = RectF() // scratch for the cooling objects
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -751,6 +842,7 @@ class BatteryFaceView @JvmOverloads constructor(
         coolPalette.build(innerRect.top, innerRect.bottom)
         hotPalette.build(innerRect.top, innerRect.bottom)
         neutralPalette.build(innerRect.top, innerRect.bottom)
+        heatPalette.build(innerRect.top, innerRect.bottom)
         capShader = LinearGradient(
             capRect.left, 0f, capRect.right, 0f,
             intArrayOf(capDark, capMid, capLight, capMid, capDark),
@@ -1056,10 +1148,21 @@ class BatteryFaceView @JvmOverloads constructor(
         val palette = paletteFor(kind)
 
         // No aura and no ground shadow since v0.3.21: the battery
-        // stands on the flat surface, not floating over it. Since
-        // v0.3.23 nothing stands around the body either — the
-        // flames and crystals are retired, and the character's own
-        // face (below) is the only mark on the body.
+        // stands on the flat surface, not floating over it.
+        // v0.3.27: the heat expression stands around the body again
+        // — geometric flames (never while charging, never without
+        // a verdict) and the earned cooling objects — drawn first,
+        // so the body overlaps their bases and they read as
+        // gathered around it, never pasted over it.
+        val scene = heatScene
+        if (scene != null && kind != FaceKind.UNKNOWN) {
+            if (kind != FaceKind.CHARGING && scene.flameLevel > 0) {
+                drawFlames(canvas, scene)
+            }
+            if (scene.objects.isNotEmpty()) {
+                drawCoolObjects(canvas, scene)
+            }
+        }
         drawBody(canvas, palette, kind)
 
         // The bolt is the charging state's marker, drawn over the
@@ -1123,10 +1226,24 @@ class BatteryFaceView @JvmOverloads constructor(
             canvas.drawOval(faceRect, faceFillPaint)
         }
 
-        // Mouth, by state (see the section comment).
+        // Mouth. v0.3.27: while a heat verdict exists, the mouth
+        // follows the heat (HeatScene) — a wavy trembling line
+        // when hot, a flat line on the way, the calm smile when
+        // cool. Charging keeps its smile and the unknown face its
+        // flat line, whatever the heat says; without a heat
+        // verdict the v0.3.23 mouths apply unchanged (smile /
+        // small open oval / flat line).
         val mouthY = bodyTop + bodyH * 0.28f
-        when (kind) {
-            FaceKind.SAVING, FaceKind.CHARGING -> {
+        val heatMouth = heatScene?.takeIf { it.heat != null }?.mouth
+        val mouth: HeatScene.Mouth? = when {
+            kind == FaceKind.UNKNOWN -> HeatScene.Mouth.FLAT
+            kind == FaceKind.CHARGING -> HeatScene.Mouth.SMILE
+            heatMouth != null -> heatMouth
+            kind == FaceKind.SAVING -> HeatScene.Mouth.SMILE
+            else -> null // legacy not-saving: the small open oval
+        }
+        when (mouth) {
+            HeatScene.Mouth.SMILE -> {
                 // Calm smile: the lower arc of a small ellipse.
                 val mw = dp(16f) * fs
                 val mh = dp(11f) * fs
@@ -1134,22 +1251,258 @@ class BatteryFaceView @JvmOverloads constructor(
                 faceStrokePaint.strokeWidth = dp(2.4f) * fs
                 canvas.drawArc(faceRect, 25f, 130f, false, faceStrokePaint)
             }
-            FaceKind.HOT -> {
+            HeatScene.Mouth.WAVY -> {
+                // Trembling mouth (v0.3.27): a small zigzag — the
+                // geometric wave of the approved mock-up's hot face.
+                val halfW = dp(8f) * fs
+                val amp = dp(2.2f) * fs
+                faceStrokePaint.strokeWidth = dp(2.4f) * fs
+                val seg = (halfW * 2f) / 4f
+                flamePath.reset()
+                flamePath.moveTo(cx - halfW, mouthY)
+                for (i in 1..4) {
+                    val x = cx - halfW + seg * i
+                    val y = if (i % 2 == 1) mouthY - amp else mouthY + amp
+                    if (i == 4) flamePath.lineTo(x, mouthY) else flamePath.lineTo(x, y)
+                }
+                canvas.drawPath(flamePath, faceStrokePaint)
+            }
+            HeatScene.Mouth.FLAT -> {
+                // Flat line: no expression while there is no verdict,
+                // or a face only part-way cool.
+                val half = dp(5.5f) * fs
+                faceStrokePaint.strokeWidth = dp(2.4f) * fs
+                canvas.drawLine(cx - half, mouthY, cx + half, mouthY, faceStrokePaint)
+            }
+            null -> {
                 // Small open mouth: a plain filled oval.
                 val mw = dp(7.5f) * fs
                 val mh = dp(10f) * fs
                 faceRect.set(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
                 canvas.drawOval(faceRect, faceFillPaint)
             }
-            FaceKind.UNKNOWN -> {
-                // Flat line: no expression while there is no verdict.
-                val half = dp(5.5f) * fs
-                faceStrokePaint.strokeWidth = dp(2.4f) * fs
-                canvas.drawLine(cx - half, mouthY, cx + half, mouthY, faceStrokePaint)
-            }
         }
         faceFillPaint.alpha = 255
         faceStrokePaint.alpha = 255
+    }
+
+    // ---------------- Heat expression (v0.3.27) ----------------
+    //
+    // Geometric flames and cooling objects, drawn as flat shapes
+    // in the language of the approved mock-up (board v4): simple
+    // silhouettes, pale fills, one quiet line colour. Sizes derive
+    // from the body's rect, so they scale with the face like
+    // everything else. The only motion is the flames' gentle sway
+    // and the fan's slow blades, both on the existing animation
+    // clock (splashClock) — a still face (reduced motion) gets
+    // the same picture, frozen.
+
+    /** Bubble count for a heat activity: 3 (calm) … 8 (hottest). */
+    private fun heatBubbleCount(activity: Float): Int =
+        (3f + 5f * activity).roundToInt().coerceIn(0, BUBBLE_POOL)
+
+    private fun drawFlames(canvas: Canvas, scene: HeatScene.Scene) {
+        val heat = scene.heat ?: return
+        val level = scene.flameLevel.coerceIn(0, 3)
+        val count = FLAME_COUNTS[level]
+        if (count == 0) return
+        val levelScale = FLAME_SCALES[level]
+        // The flames redden with the heat on their own axis (pale
+        // coral → deep red): even a small flame is never blue.
+        val outer = ColorUtils.blendARGB(FLAME_PALE, FLAME_DEEP, heat)
+        val inner = ColorUtils.blendARGB(FLAME_INNER_PALE, FLAME_INNER_DEEP, heat)
+        val unit = bodyRect.width() * 0.26f
+        for (i in 0 until count) {
+            val a = FLAME_ANCHORS[i]
+            val bx = bodyRect.left + bodyRect.width() * a[0]
+            val by = bodyRect.top + bodyRect.height() * a[1]
+            val h = unit * a[2] * levelScale
+            val w = h * 0.62f
+            // A gentle sway on the animation clock — decoration
+            // stays quiet; the flames never thrash.
+            val sway = sin(splashClock * 2.4f + i * 1.7f).toFloat() * unit * 0.07f
+            flamePaint.color = outer
+            flamePathTo(flamePath, bx, by, w, h, sway)
+            canvas.drawPath(flamePath, flamePaint)
+            flamePaint.color = inner
+            flamePathTo(flamePath, bx, by, w * 0.55f, h * 0.58f, sway * 0.5f)
+            canvas.drawPath(flamePath, flamePaint)
+            flamePaint.color = FLAME_CORE
+            flamePathTo(flamePath, bx, by, w * 0.26f, h * 0.30f, sway * 0.3f)
+            canvas.drawPath(flamePath, flamePaint)
+        }
+    }
+
+    /** One geometric flame: a teardrop silhouette standing on
+     *  (bx, by), w wide and h tall, its tip leaning by sway. */
+    private fun flamePathTo(path: Path, bx: Float, by: Float, w: Float, h: Float, sway: Float) {
+        path.reset()
+        path.moveTo(bx - w / 2f, by)
+        path.cubicTo(bx - w / 2f, by - h * 0.45f, bx - w * 0.18f, by - h * 0.62f, bx + sway, by - h)
+        path.cubicTo(bx + w * 0.30f, by - h * 0.60f, bx + w / 2f, by - h * 0.42f, bx + w / 2f, by)
+        path.quadTo(bx, by - h * 0.10f, bx - w / 2f, by)
+        path.close()
+    }
+
+    private fun drawCoolObjects(canvas: Canvas, scene: HeatScene.Scene) {
+        val s = bodyRect.width() * 0.26f
+        objStrokePaint.strokeWidth = s * 0.045f
+        // Fixed enum order, so overlapping neighbours layer the
+        // same way on every frame.
+        for (obj in HeatScene.CoolObject.values()) {
+            if (obj !in scene.objects) continue
+            val a = objectAnchor(obj)
+            val cx = bodyRect.left + bodyRect.width() * a[0]
+            val cy = bodyRect.top + bodyRect.height() * a[1]
+            drawCoolObject(canvas, obj, cx, cy, s)
+        }
+    }
+
+    /** Each object's fixed seat around the body (fractions of the
+     *  body's width / height from its top-left). The ring stays in
+     *  the body's neighbourhood — the minimal white around the
+     *  face slot is not touched. */
+    private fun objectAnchor(obj: HeatScene.CoolObject): FloatArray = when (obj) {
+        HeatScene.CoolObject.PARASOL -> floatArrayOf(-0.19f, 0.06f)
+        HeatScene.CoolObject.AIRCON -> floatArrayOf(1.19f, 0.04f)
+        HeatScene.CoolObject.WINDBELL -> floatArrayOf(-0.19f, 0.34f)
+        HeatScene.CoolObject.FAN -> floatArrayOf(1.19f, 0.40f)
+        HeatScene.CoolObject.ICE -> floatArrayOf(-0.19f, 0.68f)
+        HeatScene.CoolObject.SHAVED_ICE -> floatArrayOf(1.19f, 0.72f)
+        HeatScene.CoolObject.SNOWMAN -> floatArrayOf(-0.18f, 0.94f)
+    }
+
+    /** One cooling object, centred at (cx, cy) in a box ~s wide.
+     *  Plain geometric shapes only — the mock-up's language. */
+    private fun drawCoolObject(canvas: Canvas, obj: HeatScene.CoolObject, cx: Float, cy: Float, s: Float) {
+        when (obj) {
+            HeatScene.CoolObject.PARASOL -> {
+                canvas.save()
+                canvas.rotate(-14f, cx, cy)
+                // Canopy: a half dome on a chord.
+                objRect.set(cx - s * 0.55f, cy - s * 0.38f, cx + s * 0.55f, cy + s * 0.38f)
+                flamePath.reset()
+                flamePath.arcTo(objRect, 180f, 180f)
+                flamePath.close()
+                objFillPaint.color = OBJ_PEACH
+                canvas.drawPath(flamePath, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawPath(flamePath, objStrokePaint)
+                // Pole, leaning out below the canopy.
+                canvas.drawLine(cx, cy - s * 0.30f, cx - s * 0.12f, cy + s * 0.52f, objStrokePaint)
+                canvas.restore()
+            }
+            HeatScene.CoolObject.AIRCON -> {
+                objRect.set(cx - s * 0.52f, cy - s * 0.27f, cx + s * 0.52f, cy + s * 0.27f)
+                objFillPaint.color = OBJ_WHITE
+                canvas.drawRoundRect(objRect, s * 0.08f, s * 0.08f, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawRoundRect(objRect, s * 0.08f, s * 0.08f, objStrokePaint)
+                // Vent slats in the lower half.
+                objStrokePaint.color = OBJ_BLUE
+                canvas.drawLine(cx - s * 0.38f, cy + s * 0.05f, cx + s * 0.38f, cy + s * 0.05f, objStrokePaint)
+                canvas.drawLine(cx - s * 0.38f, cy + s * 0.17f, cx + s * 0.38f, cy + s * 0.17f, objStrokePaint)
+                // Cool air drifting down.
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawLine(cx - s * 0.22f, cy + s * 0.40f, cx - s * 0.16f, cy + s * 0.52f, objStrokePaint)
+                canvas.drawLine(cx + s * 0.10f, cy + s * 0.40f, cx + s * 0.16f, cy + s * 0.52f, objStrokePaint)
+            }
+            HeatScene.CoolObject.WINDBELL -> {
+                // Hanger, glass dome, and the paper strip below.
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawLine(cx, cy - s * 0.52f, cx, cy - s * 0.18f, objStrokePaint)
+                objRect.set(cx - s * 0.27f, cy - s * 0.20f, cx + s * 0.27f, cy + s * 0.34f)
+                flamePath.reset()
+                flamePath.arcTo(objRect, 180f, 180f)
+                flamePath.close()
+                objFillPaint.color = OBJ_ICE
+                canvas.drawPath(flamePath, objFillPaint)
+                canvas.drawPath(flamePath, objStrokePaint)
+                objRect.set(cx - s * 0.08f, cy + s * 0.10f, cx + s * 0.08f, cy + s * 0.46f)
+                objFillPaint.color = OBJ_PEACH
+                canvas.drawRect(objRect, objFillPaint)
+                canvas.drawRect(objRect, objStrokePaint)
+            }
+            HeatScene.CoolObject.FAN -> {
+                val headY = cy - s * 0.10f
+                val headR = s * 0.34f
+                // Stand and base first, so the head overlaps them.
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawLine(cx, headY + headR * 0.6f, cx, cy + s * 0.42f, objStrokePaint)
+                canvas.drawLine(cx - s * 0.24f, cy + s * 0.46f, cx + s * 0.24f, cy + s * 0.46f, objStrokePaint)
+                objFillPaint.color = OBJ_ICE
+                canvas.drawCircle(cx, headY, headR, objFillPaint)
+                // Three blades turning slowly on the animation clock.
+                objFillPaint.color = OBJ_BLUE
+                val angle = splashClock * 40f
+                for (i in 0..2) {
+                    canvas.save()
+                    canvas.translate(cx, headY)
+                    canvas.rotate(angle + i * 120f)
+                    objRect.set(-headR * 0.30f, -headR * 0.92f, headR * 0.30f, -headR * 0.12f)
+                    canvas.drawOval(objRect, objFillPaint)
+                    canvas.restore()
+                }
+                objFillPaint.color = OBJ_WHITE
+                canvas.drawCircle(cx, headY, headR * 0.16f, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawCircle(cx, headY, headR, objStrokePaint)
+            }
+            HeatScene.CoolObject.ICE -> {
+                flamePath.reset()
+                flamePath.moveTo(cx, cy - s * 0.42f)
+                flamePath.lineTo(cx + s * 0.36f, cy)
+                flamePath.lineTo(cx, cy + s * 0.42f)
+                flamePath.lineTo(cx - s * 0.36f, cy)
+                flamePath.close()
+                objFillPaint.color = OBJ_ICE
+                canvas.drawPath(flamePath, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawPath(flamePath, objStrokePaint)
+                // One facet line — the geometric cut of the cube.
+                canvas.drawLine(cx, cy - s * 0.42f, cx, cy + s * 0.08f, objStrokePaint)
+                canvas.drawLine(cx, cy + s * 0.08f, cx + s * 0.36f, cy, objStrokePaint)
+            }
+            HeatScene.CoolObject.SHAVED_ICE -> {
+                // Ice dome over a trapezoid bowl.
+                objRect.set(cx - s * 0.38f, cy - s * 0.34f, cx + s * 0.38f, cy + s * 0.42f)
+                flamePath.reset()
+                flamePath.arcTo(objRect, 180f, 180f)
+                flamePath.close()
+                objFillPaint.color = OBJ_WHITE
+                canvas.drawPath(flamePath, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawPath(flamePath, objStrokePaint)
+                objFillPaint.color = OBJ_PINK
+                canvas.drawCircle(cx, cy - s * 0.30f, s * 0.07f, objFillPaint)
+                flamePath.reset()
+                flamePath.moveTo(cx - s * 0.44f, cy + s * 0.06f)
+                flamePath.lineTo(cx + s * 0.44f, cy + s * 0.06f)
+                flamePath.lineTo(cx + s * 0.27f, cy + s * 0.40f)
+                flamePath.lineTo(cx - s * 0.27f, cy + s * 0.40f)
+                flamePath.close()
+                objFillPaint.color = OBJ_BLUE
+                canvas.drawPath(flamePath, objFillPaint)
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawPath(flamePath, objStrokePaint)
+            }
+            HeatScene.CoolObject.SNOWMAN -> {
+                // Two stacked circles, the geometric snowman.
+                objFillPaint.color = OBJ_WHITE
+                objStrokePaint.color = OBJ_LINE
+                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, objFillPaint)
+                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, objStrokePaint)
+                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, objFillPaint)
+                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, objStrokePaint)
+                objFillPaint.color = OBJ_DARK
+                canvas.drawCircle(cx - s * 0.07f, cy - s * 0.27f, s * 0.03f, objFillPaint)
+                canvas.drawCircle(cx + s * 0.07f, cy - s * 0.27f, s * 0.03f, objFillPaint)
+                canvas.drawCircle(cx, cy + s * 0.10f, s * 0.03f, objFillPaint)
+                canvas.drawCircle(cx, cy + s * 0.26f, s * 0.03f, objFillPaint)
+                objFillPaint.color = OBJ_PEACH
+                canvas.drawCircle(cx + s * 0.04f, cy - s * 0.20f, s * 0.035f, objFillPaint)
+            }
+        }
     }
 
     /**
@@ -1285,6 +1638,25 @@ class BatteryFaceView @JvmOverloads constructor(
             canvas.restore()
         }
 
+        // Rim band (v0.3.27): a metal band across the body's top,
+        // under the terminal cap — together with the cap it gives
+        // the shell the unmistakable battery read of the approved
+        // mock-up, whose top section is an opaque metal band. Same
+        // metal gradient as the cap, clipped to the body's own
+        // round rect so the band's corners follow the shell. Drawn
+        // over the cavity and the liquid: the band is the shell's
+        // top section, not a window into it. It ends well above
+        // the eyes (17% of the body height).
+        canvas.save()
+        clipPath.reset()
+        clipPath.addRoundRect(bodyRect, radius, radius, Path.Direction.CW)
+        canvas.clipPath(clipPath)
+        capPaint.shader = capShader
+        objRect.set(bodyRect.left, bodyRect.top, bodyRect.right, bodyRect.top + bodyRect.height() * 0.075f)
+        canvas.drawRect(objRect, capPaint)
+        capPaint.shader = null
+        canvas.restore()
+
         // Terminal cap on top centre: metal gradient (kept — it is
         // what makes the cap read as metal; its white highlight line
         // was removed in v0.3.21). Drawn over the body's top edge so
@@ -1310,11 +1682,14 @@ class BatteryFaceView @JvmOverloads constructor(
      * frozen mid-rise when the animator is off (reduced motion).
      */
     private fun drawBubbles(canvas: Canvas, palette: Palette, kind: FaceKind, baseY: Float, fillH: Float) {
-        val (count, alpha) = when (kind) {
-            FaceKind.HOT -> BUBBLE_COUNTS[0] to 130
-            FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 120
-            FaceKind.SAVING -> BUBBLE_COUNTS[2] to 70
-            FaceKind.UNKNOWN -> return
+        val heatActivity = heatScene?.takeIf { it.heat != null }?.particleActivity
+        val (count, alpha) = when {
+            kind == FaceKind.UNKNOWN -> return
+            kind != FaceKind.CHARGING && heatActivity != null ->
+                heatBubbleCount(heatActivity) to (80f + 60f * heatActivity).toInt()
+            kind == FaceKind.HOT -> BUBBLE_COUNTS[0] to 130
+            kind == FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 120
+            else -> BUBBLE_COUNTS[2] to 70
         }
         if (count == 0 || fillH < dp(24f)) return
         bubblePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.55f)
@@ -1366,9 +1741,11 @@ class BatteryFaceView @JvmOverloads constructor(
     }
 
     // The snow crystals and layered flames that carried the state
-    // around the body until v0.3.22 were removed in v0.3.23: the
-    // simple face (dot eyes + mouth, above) and the liquid's colour
-    // and motion carry the state now. See the class doc.
+    // around the body until v0.3.22 were removed in v0.3.23. The
+    // geometric flames and cooling objects of v0.3.27 (a different
+    // drawing in a different language, driven by the checklist's
+    // heat rather than the judge's verdict) live in the heat
+    // section above. See the class doc.
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
@@ -1421,5 +1798,38 @@ class BatteryFaceView @JvmOverloads constructor(
         // Fixed particle pools — sized once, never grown per frame.
         private const val DROP_POOL = 24
         private const val BUBBLE_POOL = 8
+
+        // Heat expression (v0.3.27): flame anchors around the body
+        // (x / base-y as fractions of the body's width / height,
+        // relative size), in the order they appear as the flame
+        // level rises; counts and size scales per level 0…3.
+        private val FLAME_ANCHORS = arrayOf(
+            floatArrayOf(0.16f, 0.0f, 1.0f),
+            floatArrayOf(0.84f, 0.0f, 1.0f),
+            floatArrayOf(-0.04f, 0.32f, 0.85f),
+            floatArrayOf(1.04f, 0.32f, 0.85f),
+            floatArrayOf(0.50f, -0.03f, 1.15f),
+            floatArrayOf(-0.05f, 0.66f, 0.75f),
+            floatArrayOf(1.05f, 0.66f, 0.75f),
+        )
+        private val FLAME_COUNTS = intArrayOf(0, 3, 5, 7)
+        private val FLAME_SCALES = floatArrayOf(0f, 0.55f, 0.8f, 1.05f)
+        // Flame colours (character-expression only, recorded in
+        // ART_DIRECTION): pale coral at low heat → deep red at
+        // full heat; the inner flame and core follow the same axis.
+        private val FLAME_PALE = Color.rgb(0xF2, 0x99, 0x7A)
+        private val FLAME_DEEP = Color.rgb(0xD4, 0x2A, 0x1E)
+        private val FLAME_INNER_PALE = Color.rgb(0xFF, 0xC9, 0x8A)
+        private val FLAME_INNER_DEEP = Color.rgb(0xF0, 0x76, 0x2B)
+        private val FLAME_CORE = Color.rgb(0xFF, 0xE3, 0xAE)
+        // Cooling-object colours (character-expression only):
+        // one quiet line colour and pale fills, the mock-up's set.
+        private val OBJ_LINE = Color.rgb(0x6E, 0x8C, 0xA0)
+        private val OBJ_BLUE = Color.rgb(0x9C, 0xC8, 0xE8)
+        private val OBJ_ICE = Color.rgb(0xD8, 0xF0, 0xFA)
+        private val OBJ_PEACH = Color.rgb(0xF8, 0xC4, 0x71)
+        private val OBJ_WHITE = Color.rgb(0xFF, 0xFF, 0xFF)
+        private val OBJ_PINK = Color.rgb(0xF1, 0x94, 0xA0)
+        private val OBJ_DARK = Color.rgb(0x45, 0x5A, 0x64)
     }
 }

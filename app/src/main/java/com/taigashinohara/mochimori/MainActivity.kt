@@ -801,6 +801,17 @@ class MainActivity : AppCompatActivity() {
         val anyExpanded = detailsOpen || normalChecklistOpen || (limitMode && limitChecklistOpen)
         val spacerTop = View(this)
         val spacerBottom = View(this)
+        // The checklist is assembled before the face (v0.3.27):
+        // the face's heat expression is decided from the normal
+        // tier's verdicts (HeatScene), and the cards below reuse
+        // the same entries, so the picture and the list can never
+        // disagree.
+        val checklistInput = readChecklistInput(s)
+        val normalEntries = SavingChecklist.evaluateNormal(checklistInput)
+        val faceHeatScene = HeatScene.of(
+            normalEntries,
+            charging = result.state == BatteryJudge.State.CHARGING,
+        )
         val face = BatteryFaceView(this).apply {
             saving = result.saving
             charging = result.state == BatteryJudge.State.CHARGING
@@ -810,6 +821,10 @@ class MainActivity : AppCompatActivity() {
             // rule switch off. The face only exists on this screen, so the
             // pulses live and die with the home tab.
             hapticsEnabled = prefs.getBoolean("haptics", true)
+            // Burning → cooling expression (v0.3.27): flames, the
+            // liquid's heat colour, the mouth and the cooling
+            // objects all follow the checklist scene.
+            heatScene = faceHeatScene
         }
         // The face stands on the flat surface alone (v0.3.21): the
         // decorative glass plate that sat behind it (layout plan A,
@@ -982,9 +997,10 @@ class MainActivity : AppCompatActivity() {
         // lives would repeat what the screen already shows
         // (minimal-information rule: don't say the same thing
         // twice).
-        val checklistInput = readChecklistInput(s)
+        // checklistInput / normalEntries were assembled above,
+        // before the face (v0.3.27) — the cards reuse them as-is.
         val checklist = checklistCard(
-            SavingChecklist.evaluateNormal(checklistInput),
+            normalEntries,
             title = "節電チェック",
             limitStyle = false,
             footer = if (limitMode) null else limitGuideRow(),
@@ -1165,192 +1181,11 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- Saving checklist (v0.3.15, expanded v0.3.16) ----------
 
-    /**
-     * Assemble the checklist's measured inputs. The battery facts come
-     * from the snapshot the home screen already read; the values the
-     * snapshot does not carry (brightness mode, screen-off timeout,
-     * power-save mode, and the v0.3.16 radio/theme/haptic reads) are
-     * read here, each with its own "could not read" sentinel so
-     * SavingChecklist can stay honest (UNKNOWN -> 「確認中」, or the
-     * row omitted where the spec says so) instead of guessing.
-     * Reading settings needs no permission beyond what the app
-     * already uses.
-     */
-    private fun readChecklistInput(s: BatterySnapshot): SavingChecklist.Input {
-        val cr = contentResolver
-        val brightnessAuto: Boolean? = try {
-            Settings.System.getInt(cr, Settings.System.SCREEN_BRIGHTNESS_MODE) ==
-                Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
-        } catch (e: Settings.SettingNotFoundException) {
-            null
-        }
-        val timeoutMs = try {
-            Settings.System.getInt(cr, Settings.System.SCREEN_OFF_TIMEOUT)
-        } catch (e: Settings.SettingNotFoundException) {
-            -1
-        }
-        val powerSave: Boolean? = try {
-            getSystemService(PowerManager::class.java)?.isPowerSaveMode
-        } catch (e: Exception) {
-            null
-        }
-        // v0.3.16: the expanded checklist's reads. Each one is a
-        // plain state read that needs no permission beyond the three
-        // the app already carries; each failure lands on its own
-        // "could not read" sentinel (see SavingChecklist).
-        val wifiManager = try {
-            getSystemService(WifiManager::class.java)
-        } catch (e: Exception) {
-            null
-        }
-        val wifiEnabled: Boolean? = try {
-            wifiManager?.isWifiEnabled
-        } catch (e: Exception) {
-            null
-        }
-        // The supplicant state is not among the WifiInfo fields the
-        // platform redacts for apps without the location permission
-        // (SSID / BSSID / network id are), so COMPLETED is a real
-        // "associated" signal. Transitional states settle on null —
-        // the row then says 確認中 instead of guessing either way.
-        @Suppress("DEPRECATION")
-        val wifiConnected: Boolean? = if (wifiEnabled == true) {
-            try {
-                when (wifiManager?.connectionInfo?.supplicantState) {
-                    SupplicantState.COMPLETED -> true
-                    SupplicantState.DISCONNECTED, SupplicantState.INACTIVE,
-                    SupplicantState.UNINITIALIZED, SupplicantState.INTERFACE_DISABLED,
-                    SupplicantState.INVALID -> false
-                    else -> null
-                }
-            } catch (e: Exception) {
-                null
-            }
-        } else {
-            null
-        }
-        val locationEnabled: Boolean? = try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                getSystemService(LocationManager::class.java)?.isLocationEnabled
-            } else {
-                @Suppress("DEPRECATION")
-                Settings.Secure.getInt(cr, Settings.Secure.LOCATION_MODE) !=
-                    Settings.Secure.LOCATION_MODE_OFF
-            }
-        } catch (e: Exception) {
-            null
-        }
-        val nfcAdapter = try {
-            NfcAdapter.getDefaultAdapter(this)
-        } catch (e: Exception) {
-            null
-        }
-        val nfcEnabled: Boolean? = if (nfcAdapter != null) {
-            try {
-                nfcAdapter.isEnabled
-            } catch (e: Exception) {
-                null
-            }
-        } else {
-            null
-        }
-        // The "mobile_data" global setting is a plain read (its
-        // Settings.Global constant is not public API, so the key is
-        // spelled out); when the key is absent the sentinel stays
-        // down and the checklist omits the row rather than guessing.
-        var mobileDataReadable = false
-        var mobileDataEnabled: Boolean? = null
-        try {
-            when (Settings.Global.getInt(cr, "mobile_data", -1)) {
-                1 -> {
-                    mobileDataReadable = true
-                    mobileDataEnabled = true
-                }
-                0 -> {
-                    mobileDataReadable = true
-                    mobileDataEnabled = false
-                }
-            }
-        } catch (e: Exception) {
-            // Unreadable: the row is omitted (see SavingChecklist).
-        }
-        val darkTheme =
-            resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-                Configuration.UI_MODE_NIGHT_YES
-        val hapticEnabled: Boolean? = try {
-            when (Settings.System.getInt(cr, Settings.System.HAPTIC_FEEDBACK_ENABLED, -1)) {
-                1 -> true
-                0 -> false
-                else -> null
-            }
-        } catch (e: Exception) {
-            null
-        }
-        // isEnabled is one of the adapter reads that does not
-        // require BLUETOOTH_CONNECT; whether anything is *connected*
-        // would require it. (Since v0.3.17 Bluetooth is judged on
-        // the limit tier, where that distinction is not needed.)
-        val bluetoothOn: Boolean? = try {
-            getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled
-        } catch (e: Exception) {
-            null
-        }
-        // Data saver (v0.3.17, limit tier): getRestrictBackground
-        // Status() is the one ConnectivityManager read that carries
-        // no permission annotation in the platform (the network-state
-        // reads beside it do, and stay unused). ENABLED and
-        // WHITELISTED both mean the device's data saver is in force
-        // — WHITELISTED only exempts this app — so both read as
-        // "restricted". Any failure leaves the sentinel down and the
-        // checklist omits the row rather than guessing.
-        var dataSaverReadable = false
-        var dataSaverRestricted: Boolean? = null
-        try {
-            when (
-                getSystemService(ConnectivityManager::class.java)
-                    ?.getRestrictBackgroundStatus()
-            ) {
-                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED,
-                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_WHITELISTED -> {
-                    dataSaverReadable = true
-                    dataSaverRestricted = true
-                }
-                ConnectivityManager.RESTRICT_BACKGROUND_STATUS_DISABLED -> {
-                    dataSaverReadable = true
-                    dataSaverRestricted = false
-                }
-            }
-        } catch (e: Exception) {
-            // Unreadable: the row is omitted (see SavingChecklist).
-        }
-        return SavingChecklist.Input(
-            levelPercent = s.levelPercent,
-            levelKnown = s.levelKnown,
-            charging = s.charging,
-            tempC = s.tempC,
-            tempKnown = s.tempKnown,
-            brightness = s.brightness,
-            brightnessAuto = brightnessAuto,
-            screenOffTimeoutMs = timeoutMs,
-            powerSaveMode = powerSave,
-            autoSavingEnabled = prefs.getBoolean("auto_saving", true),
-            canWriteSettings = s.canWriteSettings,
-            saverThresholdPercent = 30,
-            wifiEnabled = wifiEnabled,
-            wifiConnected = wifiConnected,
-            locationEnabled = locationEnabled,
-            nfcPresent = nfcAdapter != null,
-            nfcEnabled = nfcEnabled,
-            mobileDataReadable = mobileDataReadable,
-            mobileDataEnabled = mobileDataEnabled,
-            darkTheme = darkTheme,
-            hapticEnabled = hapticEnabled,
-            bluetoothOn = bluetoothOn,
-            dataSaverReadable = dataSaverReadable,
-            dataSaverRestricted = dataSaverRestricted,
-        )
-    }
-
+    /** The checklist reads live in [ChecklistReader] (v0.3.27),
+     *  shared with the widget; this stays as the home screen's
+     *  one-line entry point. */
+    private fun readChecklistInput(s: BatterySnapshot): SavingChecklist.Input =
+        ChecklistReader.read(this, s, prefs.getBoolean("auto_saving", true))
     /**
      * A checklist card (one per tier since v0.3.17): a head with the
      * donut chart and its big percent beside the title and the

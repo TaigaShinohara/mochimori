@@ -13,7 +13,9 @@ import androidx.core.content.ContextCompat
  *
  * The judgement is [BatteryJudge] with exactly the inputs MainActivity
  * uses — the widget never re-implements the rules. The face is a still
- * Bitmap from [WidgetFaceRenderer].
+ * Bitmap from [WidgetFaceRenderer]. Since v0.3.27 the still also
+ * carries the checklist heat scene (HeatScene over the shared
+ * ChecklistReader reads), judged the same way as the home screen.
  *
  * Update timing (honest limits, also in DESIGN.md §9):
  *  - the system's widget schedule: every 30 min (updatePeriodMillis —
@@ -47,6 +49,19 @@ object WidgetUpdater {
                 levelKnown = snap.levelKnown,
             ),
         )
+        // Heat scene (v0.3.27): the still's burning → cooling
+        // expression, judged from the same checklist reads as the
+        // home screen (shared ChecklistReader + SavingChecklist,
+        // limit items excluded) — the widget never judges
+        // differently. The auto-saving flag is the same one this
+        // updater already feeds the judge.
+        val normalEntries = SavingChecklist.evaluateNormal(
+            ChecklistReader.read(
+                context, snap,
+                autoSavingEnabled = prefs.getBoolean("auto_saving", true),
+            ),
+        )
+        val scene = HeatScene.of(normalEntries, charging = snap.charging)
         val (labelText, labelColorRes) = when (result.state) {
             BatteryJudge.State.SAVING -> "節電できてる" to R.color.mochi_state_cool
             BatteryJudge.State.CHARGING -> "充電中" to R.color.mochi_state_cool
@@ -57,7 +72,7 @@ object WidgetUpdater {
         val views = RemoteViews(context.packageName, R.layout.widget_mochi)
         views.setImageViewBitmap(
             R.id.widget_face,
-            WidgetFaceRenderer.render(context, result.state, snap.levelPercent),
+            WidgetFaceRenderer.render(context, result.state, snap.levelPercent, scene),
         )
         views.setTextViewText(R.id.widget_label, labelText)
         views.setTextColor(R.id.widget_label, ContextCompat.getColor(context, labelColorRes))
