@@ -1,6 +1,7 @@
 package com.taigashinohara.mochimori
 
 import android.content.Context
+import android.content.res.Resources
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -45,11 +46,16 @@ import kotlin.math.sin
  * expression, simplified for a frozen frame: the metal rim band
  * under the cap, the liquid coloured by the checklist heat
  * (HeatScene.liquidColor), geometric flames at the scene's flame
- * level (frozen upright, no sway), the earned cooling objects as
- * the same small geometric shapes, and the mouth following the
- * heat. The scene is decided by the caller (WidgetUpdater) from
- * the same checklist reads as the home screen, via the shared
- * ChecklistReader — the widget never judges differently.
+ * level (frozen upright, no sway), the earned cooling objects,
+ * and the mouth following the heat. The scene is decided by the
+ * caller (WidgetUpdater) from the same checklist reads as the
+ * home screen, via the shared ChecklistReader — the widget never
+ * judges differently.
+ *
+ * v0.3.28: the cooling objects are the same generated image
+ * assets as the live face's (CoolObjectArt), replacing the small
+ * geometric shapes drawn here and in BatteryFaceView until
+ * v0.3.27 — the still and the home screen now match exactly.
  */
 object WidgetFaceRenderer {
 
@@ -166,7 +172,7 @@ object WidgetFaceRenderer {
                 drawFlames(canvas, fill, body, scene.flameLevel, heat)
             }
             if (scene.objects.isNotEmpty()) {
-                drawCoolObjects(canvas, fill, stroke, body, scene)
+                drawCoolObjects(canvas, context.resources, body, scene)
             }
         }
 
@@ -418,13 +424,6 @@ object WidgetFaceRenderer {
     private val FLAME_INNER_PALE = Color.rgb(0xFF, 0xC9, 0x8A)
     private val FLAME_INNER_DEEP = Color.rgb(0xF0, 0x76, 0x2B)
     private val FLAME_CORE = Color.rgb(0xFF, 0xE3, 0xAE)
-    private val OBJ_LINE = Color.rgb(0x6E, 0x8C, 0xA0)
-    private val OBJ_BLUE = Color.rgb(0x9C, 0xC8, 0xE8)
-    private val OBJ_ICE = Color.rgb(0xD8, 0xF0, 0xFA)
-    private val OBJ_PEACH = Color.rgb(0xF8, 0xC4, 0x71)
-    private val OBJ_WHITE = Color.rgb(0xFF, 0xFF, 0xFF)
-    private val OBJ_PINK = Color.rgb(0xF1, 0x94, 0xA0)
-    private val OBJ_DARK = Color.rgb(0x45, 0x5A, 0x64)
 
     // Flame anchors around the body, in the live face's order
     // and fractions; counts per flame level 0…3.
@@ -475,15 +474,17 @@ object WidgetFaceRenderer {
     }
 
     private fun drawCoolObjects(
-        canvas: Canvas, fill: Paint, stroke: Paint, body: RectF, scene: HeatScene.Scene,
+        canvas: Canvas, resources: Resources, body: RectF, scene: HeatScene.Scene,
     ) {
         val s = body.width() * 0.26f
-        stroke.strokeWidth = s * 0.045f
+        // Since v0.3.28 the objects are the same generated image
+        // assets as the live face's (CoolObjectArt), at the same
+        // seats and size — the widget and the home screen match.
         for (obj in HeatScene.CoolObject.values()) {
             if (obj !in scene.objects) continue
             val (fx, fy) = objectAnchor(obj)
-            drawCoolObject(
-                canvas, fill, stroke, obj,
+            CoolObjectArt.draw(
+                canvas, resources, obj,
                 body.left + body.width() * fx, body.top + body.height() * fy, s,
             )
         }
@@ -498,117 +499,6 @@ object WidgetFaceRenderer {
         HeatScene.CoolObject.ICE -> -0.19f to 0.68f
         HeatScene.CoolObject.SHAVED_ICE -> 1.19f to 0.72f
         HeatScene.CoolObject.SNOWMAN -> -0.18f to 0.94f
-    }
-
-    /** One cooling object, centred at (cx, cy) in a box ~s wide —
-     *  the live face's geometric shapes, simplified for the still. */
-    private fun drawCoolObject(
-        canvas: Canvas, fill: Paint, stroke: Paint,
-        obj: HeatScene.CoolObject, cx: Float, cy: Float, s: Float,
-    ) {
-        stroke.color = OBJ_LINE
-        when (obj) {
-            HeatScene.CoolObject.PARASOL -> {
-                canvas.save()
-                canvas.rotate(-14f, cx, cy)
-                val rect = RectF(cx - s * 0.55f, cy - s * 0.38f, cx + s * 0.55f, cy + s * 0.38f)
-                val canopy = Path().apply { arcTo(rect, 180f, 180f); close() }
-                fill.color = OBJ_PEACH
-                canvas.drawPath(canopy, fill)
-                canvas.drawPath(canopy, stroke)
-                canvas.drawLine(cx, cy - s * 0.30f, cx - s * 0.12f, cy + s * 0.52f, stroke)
-                canvas.restore()
-            }
-            HeatScene.CoolObject.AIRCON -> {
-                val rect = RectF(cx - s * 0.52f, cy - s * 0.27f, cx + s * 0.52f, cy + s * 0.27f)
-                fill.color = OBJ_WHITE
-                canvas.drawRoundRect(rect, s * 0.08f, s * 0.08f, fill)
-                canvas.drawRoundRect(rect, s * 0.08f, s * 0.08f, stroke)
-                stroke.color = OBJ_BLUE
-                canvas.drawLine(cx - s * 0.38f, cy + s * 0.05f, cx + s * 0.38f, cy + s * 0.05f, stroke)
-                canvas.drawLine(cx - s * 0.38f, cy + s * 0.17f, cx + s * 0.38f, cy + s * 0.17f, stroke)
-            }
-            HeatScene.CoolObject.WINDBELL -> {
-                canvas.drawLine(cx, cy - s * 0.52f, cx, cy - s * 0.18f, stroke)
-                val rect = RectF(cx - s * 0.27f, cy - s * 0.20f, cx + s * 0.27f, cy + s * 0.34f)
-                val dome = Path().apply { arcTo(rect, 180f, 180f); close() }
-                fill.color = OBJ_ICE
-                canvas.drawPath(dome, fill)
-                canvas.drawPath(dome, stroke)
-                val strip = RectF(cx - s * 0.08f, cy + s * 0.10f, cx + s * 0.08f, cy + s * 0.46f)
-                fill.color = OBJ_PEACH
-                canvas.drawRect(strip, fill)
-                canvas.drawRect(strip, stroke)
-            }
-            HeatScene.CoolObject.FAN -> {
-                val headY = cy - s * 0.10f
-                val headR = s * 0.34f
-                canvas.drawLine(cx, headY + headR * 0.6f, cx, cy + s * 0.42f, stroke)
-                canvas.drawLine(cx - s * 0.24f, cy + s * 0.46f, cx + s * 0.24f, cy + s * 0.46f, stroke)
-                fill.color = OBJ_ICE
-                canvas.drawCircle(cx, headY, headR, fill)
-                // Blades at rest (a still frame does not turn them).
-                fill.color = OBJ_BLUE
-                for (i in 0..2) {
-                    canvas.save()
-                    canvas.translate(cx, headY)
-                    canvas.rotate(30f + i * 120f)
-                    val blade = RectF(-headR * 0.30f, -headR * 0.92f, headR * 0.30f, -headR * 0.12f)
-                    canvas.drawOval(blade, fill)
-                    canvas.restore()
-                }
-                fill.color = OBJ_WHITE
-                canvas.drawCircle(cx, headY, headR * 0.16f, fill)
-                canvas.drawCircle(cx, headY, headR, stroke)
-            }
-            HeatScene.CoolObject.ICE -> {
-                val diamond = Path().apply {
-                    moveTo(cx, cy - s * 0.42f)
-                    lineTo(cx + s * 0.36f, cy)
-                    lineTo(cx, cy + s * 0.42f)
-                    lineTo(cx - s * 0.36f, cy)
-                    close()
-                }
-                fill.color = OBJ_ICE
-                canvas.drawPath(diamond, fill)
-                canvas.drawPath(diamond, stroke)
-                canvas.drawLine(cx, cy - s * 0.42f, cx, cy + s * 0.08f, stroke)
-                canvas.drawLine(cx, cy + s * 0.08f, cx + s * 0.36f, cy, stroke)
-            }
-            HeatScene.CoolObject.SHAVED_ICE -> {
-                val rect = RectF(cx - s * 0.38f, cy - s * 0.34f, cx + s * 0.38f, cy + s * 0.42f)
-                val dome = Path().apply { arcTo(rect, 180f, 180f); close() }
-                fill.color = OBJ_WHITE
-                canvas.drawPath(dome, fill)
-                canvas.drawPath(dome, stroke)
-                fill.color = OBJ_PINK
-                canvas.drawCircle(cx, cy - s * 0.30f, s * 0.07f, fill)
-                val bowl = Path().apply {
-                    moveTo(cx - s * 0.44f, cy + s * 0.06f)
-                    lineTo(cx + s * 0.44f, cy + s * 0.06f)
-                    lineTo(cx + s * 0.27f, cy + s * 0.40f)
-                    lineTo(cx - s * 0.27f, cy + s * 0.40f)
-                    close()
-                }
-                fill.color = OBJ_BLUE
-                canvas.drawPath(bowl, fill)
-                canvas.drawPath(bowl, stroke)
-            }
-            HeatScene.CoolObject.SNOWMAN -> {
-                fill.color = OBJ_WHITE
-                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, fill)
-                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, stroke)
-                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, fill)
-                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, stroke)
-                fill.color = OBJ_DARK
-                canvas.drawCircle(cx - s * 0.07f, cy - s * 0.27f, s * 0.03f, fill)
-                canvas.drawCircle(cx + s * 0.07f, cy - s * 0.27f, s * 0.03f, fill)
-                canvas.drawCircle(cx, cy + s * 0.10f, s * 0.03f, fill)
-                canvas.drawCircle(cx, cy + s * 0.26f, s * 0.03f, fill)
-                fill.color = OBJ_PEACH
-                canvas.drawCircle(cx + s * 0.04f, cy - s * 0.20f, s * 0.035f, fill)
-            }
-        }
     }
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)

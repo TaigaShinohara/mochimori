@@ -32,7 +32,9 @@ import kotlin.math.sqrt
 import kotlin.math.tan
 
 /**
- * The big central battery, drawn entirely in code (no image assets).
+ * The big central battery, drawn in code — except the cooling
+ * objects, which are generated image assets since v0.3.28
+ * (see CoolObjectArt).
  *
  * v0.3.6 redesign, at the user's explicit instruction ("バッテリーは縦に
  * する／中は液体状にアニメーション／できればスマホの角度に合わせて揺
@@ -779,13 +781,10 @@ class BatteryFaceView @JvmOverloads constructor(
     private val faceStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
-    // The heat expression (v0.3.27): flat geometric flames and the
-    // cooling objects are filled shapes with one quiet line colour.
+    // The heat expression (v0.3.27): flat geometric flames are
+    // filled shapes; the cooling objects are image assets since
+    // v0.3.28 (see CoolObjectArt).
     private val flamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val objFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val objStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
-    }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
     private val boltPath = Path()
@@ -794,7 +793,7 @@ class BatteryFaceView @JvmOverloads constructor(
     private val clipPath = Path()
     private val faceRect = RectF() // scratch for the eyes and mouth
     private val flamePath = Path() // scratch for one geometric flame
-    private val objRect = RectF() // scratch for the cooling objects
+    private val objRect = RectF() // scratch rect (the rim band)
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -1346,15 +1345,16 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun drawCoolObjects(canvas: Canvas, scene: HeatScene.Scene) {
         val s = bodyRect.width() * 0.26f
-        objStrokePaint.strokeWidth = s * 0.045f
         // Fixed enum order, so overlapping neighbours layer the
-        // same way on every frame.
+        // same way on every frame. Since v0.3.28 the objects are
+        // generated image assets (CoolObjectArt), drawn at the
+        // same seats and size as the old Canvas shapes.
         for (obj in HeatScene.CoolObject.values()) {
             if (obj !in scene.objects) continue
             val a = objectAnchor(obj)
             val cx = bodyRect.left + bodyRect.width() * a[0]
             val cy = bodyRect.top + bodyRect.height() * a[1]
-            drawCoolObject(canvas, obj, cx, cy, s)
+            CoolObjectArt.draw(canvas, resources, obj, cx, cy, s)
         }
     }
 
@@ -1370,139 +1370,6 @@ class BatteryFaceView @JvmOverloads constructor(
         HeatScene.CoolObject.ICE -> floatArrayOf(-0.19f, 0.68f)
         HeatScene.CoolObject.SHAVED_ICE -> floatArrayOf(1.19f, 0.72f)
         HeatScene.CoolObject.SNOWMAN -> floatArrayOf(-0.18f, 0.94f)
-    }
-
-    /** One cooling object, centred at (cx, cy) in a box ~s wide.
-     *  Plain geometric shapes only — the mock-up's language. */
-    private fun drawCoolObject(canvas: Canvas, obj: HeatScene.CoolObject, cx: Float, cy: Float, s: Float) {
-        when (obj) {
-            HeatScene.CoolObject.PARASOL -> {
-                canvas.save()
-                canvas.rotate(-14f, cx, cy)
-                // Canopy: a half dome on a chord.
-                objRect.set(cx - s * 0.55f, cy - s * 0.38f, cx + s * 0.55f, cy + s * 0.38f)
-                flamePath.reset()
-                flamePath.arcTo(objRect, 180f, 180f)
-                flamePath.close()
-                objFillPaint.color = OBJ_PEACH
-                canvas.drawPath(flamePath, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawPath(flamePath, objStrokePaint)
-                // Pole, leaning out below the canopy.
-                canvas.drawLine(cx, cy - s * 0.30f, cx - s * 0.12f, cy + s * 0.52f, objStrokePaint)
-                canvas.restore()
-            }
-            HeatScene.CoolObject.AIRCON -> {
-                objRect.set(cx - s * 0.52f, cy - s * 0.27f, cx + s * 0.52f, cy + s * 0.27f)
-                objFillPaint.color = OBJ_WHITE
-                canvas.drawRoundRect(objRect, s * 0.08f, s * 0.08f, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawRoundRect(objRect, s * 0.08f, s * 0.08f, objStrokePaint)
-                // Vent slats in the lower half.
-                objStrokePaint.color = OBJ_BLUE
-                canvas.drawLine(cx - s * 0.38f, cy + s * 0.05f, cx + s * 0.38f, cy + s * 0.05f, objStrokePaint)
-                canvas.drawLine(cx - s * 0.38f, cy + s * 0.17f, cx + s * 0.38f, cy + s * 0.17f, objStrokePaint)
-                // Cool air drifting down.
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawLine(cx - s * 0.22f, cy + s * 0.40f, cx - s * 0.16f, cy + s * 0.52f, objStrokePaint)
-                canvas.drawLine(cx + s * 0.10f, cy + s * 0.40f, cx + s * 0.16f, cy + s * 0.52f, objStrokePaint)
-            }
-            HeatScene.CoolObject.WINDBELL -> {
-                // Hanger, glass dome, and the paper strip below.
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawLine(cx, cy - s * 0.52f, cx, cy - s * 0.18f, objStrokePaint)
-                objRect.set(cx - s * 0.27f, cy - s * 0.20f, cx + s * 0.27f, cy + s * 0.34f)
-                flamePath.reset()
-                flamePath.arcTo(objRect, 180f, 180f)
-                flamePath.close()
-                objFillPaint.color = OBJ_ICE
-                canvas.drawPath(flamePath, objFillPaint)
-                canvas.drawPath(flamePath, objStrokePaint)
-                objRect.set(cx - s * 0.08f, cy + s * 0.10f, cx + s * 0.08f, cy + s * 0.46f)
-                objFillPaint.color = OBJ_PEACH
-                canvas.drawRect(objRect, objFillPaint)
-                canvas.drawRect(objRect, objStrokePaint)
-            }
-            HeatScene.CoolObject.FAN -> {
-                val headY = cy - s * 0.10f
-                val headR = s * 0.34f
-                // Stand and base first, so the head overlaps them.
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawLine(cx, headY + headR * 0.6f, cx, cy + s * 0.42f, objStrokePaint)
-                canvas.drawLine(cx - s * 0.24f, cy + s * 0.46f, cx + s * 0.24f, cy + s * 0.46f, objStrokePaint)
-                objFillPaint.color = OBJ_ICE
-                canvas.drawCircle(cx, headY, headR, objFillPaint)
-                // Three blades turning slowly on the animation clock.
-                objFillPaint.color = OBJ_BLUE
-                val angle = splashClock * 40f
-                for (i in 0..2) {
-                    canvas.save()
-                    canvas.translate(cx, headY)
-                    canvas.rotate(angle + i * 120f)
-                    objRect.set(-headR * 0.30f, -headR * 0.92f, headR * 0.30f, -headR * 0.12f)
-                    canvas.drawOval(objRect, objFillPaint)
-                    canvas.restore()
-                }
-                objFillPaint.color = OBJ_WHITE
-                canvas.drawCircle(cx, headY, headR * 0.16f, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawCircle(cx, headY, headR, objStrokePaint)
-            }
-            HeatScene.CoolObject.ICE -> {
-                flamePath.reset()
-                flamePath.moveTo(cx, cy - s * 0.42f)
-                flamePath.lineTo(cx + s * 0.36f, cy)
-                flamePath.lineTo(cx, cy + s * 0.42f)
-                flamePath.lineTo(cx - s * 0.36f, cy)
-                flamePath.close()
-                objFillPaint.color = OBJ_ICE
-                canvas.drawPath(flamePath, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawPath(flamePath, objStrokePaint)
-                // One facet line — the geometric cut of the cube.
-                canvas.drawLine(cx, cy - s * 0.42f, cx, cy + s * 0.08f, objStrokePaint)
-                canvas.drawLine(cx, cy + s * 0.08f, cx + s * 0.36f, cy, objStrokePaint)
-            }
-            HeatScene.CoolObject.SHAVED_ICE -> {
-                // Ice dome over a trapezoid bowl.
-                objRect.set(cx - s * 0.38f, cy - s * 0.34f, cx + s * 0.38f, cy + s * 0.42f)
-                flamePath.reset()
-                flamePath.arcTo(objRect, 180f, 180f)
-                flamePath.close()
-                objFillPaint.color = OBJ_WHITE
-                canvas.drawPath(flamePath, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawPath(flamePath, objStrokePaint)
-                objFillPaint.color = OBJ_PINK
-                canvas.drawCircle(cx, cy - s * 0.30f, s * 0.07f, objFillPaint)
-                flamePath.reset()
-                flamePath.moveTo(cx - s * 0.44f, cy + s * 0.06f)
-                flamePath.lineTo(cx + s * 0.44f, cy + s * 0.06f)
-                flamePath.lineTo(cx + s * 0.27f, cy + s * 0.40f)
-                flamePath.lineTo(cx - s * 0.27f, cy + s * 0.40f)
-                flamePath.close()
-                objFillPaint.color = OBJ_BLUE
-                canvas.drawPath(flamePath, objFillPaint)
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawPath(flamePath, objStrokePaint)
-            }
-            HeatScene.CoolObject.SNOWMAN -> {
-                // Two stacked circles, the geometric snowman.
-                objFillPaint.color = OBJ_WHITE
-                objStrokePaint.color = OBJ_LINE
-                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, objFillPaint)
-                canvas.drawCircle(cx, cy + s * 0.18f, s * 0.30f, objStrokePaint)
-                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, objFillPaint)
-                canvas.drawCircle(cx, cy - s * 0.24f, s * 0.20f, objStrokePaint)
-                objFillPaint.color = OBJ_DARK
-                canvas.drawCircle(cx - s * 0.07f, cy - s * 0.27f, s * 0.03f, objFillPaint)
-                canvas.drawCircle(cx + s * 0.07f, cy - s * 0.27f, s * 0.03f, objFillPaint)
-                canvas.drawCircle(cx, cy + s * 0.10f, s * 0.03f, objFillPaint)
-                canvas.drawCircle(cx, cy + s * 0.26f, s * 0.03f, objFillPaint)
-                objFillPaint.color = OBJ_PEACH
-                canvas.drawCircle(cx + s * 0.04f, cy - s * 0.20f, s * 0.035f, objFillPaint)
-            }
-        }
     }
 
     /**
@@ -1822,14 +1689,5 @@ class BatteryFaceView @JvmOverloads constructor(
         private val FLAME_INNER_PALE = Color.rgb(0xFF, 0xC9, 0x8A)
         private val FLAME_INNER_DEEP = Color.rgb(0xF0, 0x76, 0x2B)
         private val FLAME_CORE = Color.rgb(0xFF, 0xE3, 0xAE)
-        // Cooling-object colours (character-expression only):
-        // one quiet line colour and pale fills, the mock-up's set.
-        private val OBJ_LINE = Color.rgb(0x6E, 0x8C, 0xA0)
-        private val OBJ_BLUE = Color.rgb(0x9C, 0xC8, 0xE8)
-        private val OBJ_ICE = Color.rgb(0xD8, 0xF0, 0xFA)
-        private val OBJ_PEACH = Color.rgb(0xF8, 0xC4, 0x71)
-        private val OBJ_WHITE = Color.rgb(0xFF, 0xFF, 0xFF)
-        private val OBJ_PINK = Color.rgb(0xF1, 0x94, 0xA0)
-        private val OBJ_DARK = Color.rgb(0x45, 0x5A, 0x64)
     }
 }

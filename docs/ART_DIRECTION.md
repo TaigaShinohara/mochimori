@@ -104,8 +104,20 @@ v0.2.0 で新設（UX審査 追加A の解消）。v0.3.0 でデザインの実�
 - **液体の色**: 熱さで2区間補間（`HeatScene.liquidColor`）: 冷めた #5EA9DD（淡青）→ 途中 #F0A868（淡ピーチ）→ 熱い #D42A1E（濃い赤）。テーマの状態色（節電できてる青／警告オレンジ等）は顔が熱さを持つ間だけ、この熱さ色に置き換わる（充電中・確認中・熱さ無しは従来の色）。気泡は熱いほど多く・速く（3〜8粒、速度 0.35〜1.4）。
 - **口**: 熱さで変わる — 熱さ 0 = 笑いの弧、0.6 以上 = ギザギザの震え口、それ以外 = 真一文字。充電中は常時笑いの弧、確認中は真一文字。
 - **正直さ**: 温度チェックが NG（実測の発熱）の時は、他が全部埋まっていても小さな炎（段階1以上）を残す。充電中は炎なし・穏やか（稲妻は従来どおり）。
-- **冷ます物**: 通常7項目の OK に対応して、本体の周囲の固定席に小さな幾何学アイコンが1つずつ増える。対応は固定: 明るさ→日傘（左上）／消灯時間→風鈴（左中）／温度→氷（左下）／省電力モード→クーラー（右上）／自動節電ルール→扇風機（右中、羽根だけアニメーション時計でゆっくり回る）／Wi-Fi→かき氷（右下）／ダークテーマ→雪だるま（左下隅）。大きさは本体幅の約26%、置き場はキャラの周囲だけ — 背景や画面全体のミニマル白は壊さない。限界モード側の6項目では増えない。物の色（キャラ表現専用）: 線 #6E8CA0、青 #9CC8E8、氷 #D8F0FA、桃 #F8C471、白 #FFFFFF、桃ピンク #F194A0、濃色 #455A64。
-- **ウィジェット**: 同じ形・同じ熱さ色・同じ対応で静止画化する（炎は直立で凍結、扇風機の羽根は静止角、判定は ChecklistReader＋SavingChecklist の共有読み取り）。
+- **冷ます物**: 通常7項目の OK に対応して、本体の周囲の固定席に小さなアイコンが1つずつ増える。対応は固定: 明るさ→日傘（左上）／消灯時間→風鈴（左中）／温度→氷（左下）／省電力モード→クーラー（右上）／自動節電ルール→扇風機（右中）／Wi-Fi→かき氷（右下）／ダークテーマ→雪だるま（左下隅）。大きさは本体幅の約26%、置き場はキャラの周囲だけ — 背景や画面全体のミニマル白は壊さない。限界モード側の6項目では増えない。v0.3.27 では Canvas の幾何学図形で描いていたが、**v0.3.28 からは生成画像アセット**（本人の指示「それぞれ画像として生成して使おう」）。画風は承認モックアップ v4 と同じ幾何学ベクター・淡パステル・スレート色の線で、氷だけは本人が別途承認した直し案（角丸キューブ3つ積み＋白いハイライト線）の形。アセットの作り方は下記「冷ます物アセットの生成レシピ（v0.3.28）」が正本。画像化に伴い、扇風機の羽根回転アニメーションは廃止した（静止画として立つ）。
+- **ウィジェット**: 同じ形・同じ熱さ色・同じ対応で静止画化する（炎は直立で凍結、判定は ChecklistReader＋SavingChecklist の共有読み取り）。冷ます物はホームと同じアセット画像を使うので、両者の見た目は完全に一致する。
+
+### 冷ます物アセットの生成レシピ（v0.3.28）
+
+将来の追加・差し替えでも画風を再現できるよう、v0.3.28 の生成手順を正本として残す。
+
+- **生成**: media.generate_image で1物ずつ個別生成する。生成元画像は proposals/ に `coolobj-<name>-source` として残す。プロンプトの型（対象部分だけ差し替える）:
+  > A single icon illustration on a pure solid white background: <対象の説明>. Flat geometric vector style, simple clean shapes, thin slate-blue outline lines, pale pastel colors. The object is centered and fills about 60% of the frame, with generous white margin on all sides. No text, no letters, no other objects, no ground, no drop shadow, no gradient — just the one object on white.
+  - 対象の説明の例: 日傘 = "a beach parasol (sun umbrella) with a pale peach-orange canopy, tilted slightly, a straight pole and a small curved hook handle at the bottom"／風鈴 = "a Japanese glass wind chime (furin) — a small pale blue glass bell dome hanging from a short string at the top, with a small rectangular pale peach paper strip hanging below the dome"／クーラー = "a wall-mounted split air conditioner unit — a horizontal rounded rectangle in white and pale blue-grey, with two thin horizontal vent slats near the bottom edge and a small pale blue vent flap below"／扇風機 = "a small electric desk fan with a round head, three pale blue blades inside a thin circular frame, a short stand and a flat oval base"／かき氷 = "a bowl of Japanese shaved ice (kakigori) — a fluffy white shaved-ice dome mounded high over a pale blue bowl, with a small soft pink syrup patch on top of the dome"／雪だるま = "a small snowman made of two stacked white circles — a smaller round head on top of a larger round body — with two tiny dark dot eyes, two tiny dark buttons on the body, and one tiny pale orange dot nose"
+  - 氷だけは承認済み直し案の画像を参照画像として渡し、"Redraw the exact same icon as in the reference image" と指示して形（角丸キューブ3つ積み＋白い斜めハイライト線＋小さなキラキラ）を固定した。
+- **後処理（白背景→透過）**: 生成ツールは透過を出せないため、PIL＋scipy で変換する。(1) min チャンネル ≥240 を「白らしい」マスクとし、連結成分のうち画像の縁に触れるものを背景として alpha=0（囲まれた白＝雪だるまの体やかき氷のドームは残る）。(2) 前景を1px 侵食してアンチエイリアスの白フチを削り、alpha を半径0.8px のガウスで軽くぼかす。(3) 半透明になった縁ピクセルは白とのブレンドを逆算して色を復元する（ダーク背景でも白い輪郭が残らない）。(4) alpha の外接矩形で切り抜き、512×512 の透過キャンバスの中央に、最長辺がキャンバスの96%になるよう配置する。
+- **保存形式**: 透過 WebP、lossy quality 88（method 6）。7枚合計 118,798 bytes（約116KiB）。lossless だと約436KiB になるため採らない — 表示サイズ（本体幅の約26%）では q88 の劣化は見えないことを、白背景・濃紺背景（#0B1C26）の両方に並べた確認シートで検証済み。
+- **配置と描画**: `app/src/main/res/drawable-nodpi/coolobj_<name>.webp`（name = parasol / windbell / ice / aircon / fan / shaved_ice / snowman）。描画は共有ヘルパー `CoolObjectArt` が担い、BatteryFaceView と WidgetFaceRenderer は従来と同じ固定席・同じ大きさ（本体幅の約26%の正方形）で drawBitmap する。表示する物の集合の判定は `HeatScene` のまま不変。
 
 ## Simple Glass の採用（v0.3.8、本人の決定 2026-11-19／v0.3.10 で作風として統一、本人の決定 2026-11-20）【v0.3.21 で終了・経緯の記録】
 
