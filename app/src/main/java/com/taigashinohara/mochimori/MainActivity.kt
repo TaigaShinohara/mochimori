@@ -1140,6 +1140,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Shorten the screen-off timeout only (v0.3.25): the checklist
+     * sheet's in-app fix for the timeout row, the counterpart of
+     * fixBrightness. The target is the checklist's own OK threshold
+     * (30s), not the auto profile's 15s — a manual one-item fix
+     * should land exactly on the value the row judges by. Without
+     * the WRITE_SETTINGS permission this follows the same honest
+     * path as fixBrightness: say so, then open the permission flow.
+     */
+    private fun fixScreenTimeout() {
+        if (Settings.System.canWrite(this)) {
+            Settings.System.putInt(
+                contentResolver, Settings.System.SCREEN_OFF_TIMEOUT,
+                SavingChecklist.TIMEOUT_OK_MS,
+            )
+            Toast.makeText(this, "消灯までの時間を30秒にしました", Toast.LENGTH_SHORT).show()
+            showScreen(currentScreen)
+        } else {
+            Toast.makeText(this, "最初に1回だけ、設定変更の許可が必要です", Toast.LENGTH_LONG).show()
+            requestWriteSettings()
+        }
+    }
+
     // ---------- Saving checklist (v0.3.15, expanded v0.3.16) ----------
 
     /**
@@ -1593,17 +1616,115 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Where a row tap goes: the settings screen that owns the value,
-     * the rules screen for this app's own toggle, the permission flow
-     * when the auto-saving row is waiting on it, and a how-to dialog
-     * for temperature — heat has no settings screen, so the honest
-     * destination is an explanation (the same cooling advice the
-     * home HEAT line gives, spelled out). The v0.3.16 rows each open
-     * the settings screen that owns their switch (Wi-Fi, data usage,
-     * location, NFC, Bluetooth, sound for haptics, display for the
-     * dark theme).
+     * Where a row tap goes (v0.3.25): a row that is NOT saving no
+     * longer jumps straight to its destination — the user asked
+     * 「いきなり設定画面に飛ぶのではなく」 — it first opens the
+     * explanation sheet (showChecklistGuide): what change saves
+     * battery, what it costs, and, for settings items, the taps to
+     * make on the screen that opens. Only the sheet's primary
+     * button proceeds to the destination below (or applies the
+     * in-app fix). Rows that are already saving, still being read,
+     * or info-only keep the direct destinations they have always
+     * had: the settings screen that owns the value, the rules
+     * screen for this app's own toggle, the permission flow when
+     * the auto-saving row is waiting on it, and the cooling dialog
+     * for temperature.
      */
     private fun onChecklistTap(entry: SavingChecklist.Entry) {
+        if (entry.status == SavingChecklist.Status.NG) {
+            showChecklistGuide(entry)
+        } else {
+            openChecklistDestination(entry)
+        }
+    }
+
+    /**
+     * The pre-fix explanation sheet (v0.3.25). One quiet dialog in
+     * the app's existing MaterialAlertDialogBuilder style and the
+     * 案E minimal-white manner: the item name as title, then up to
+     * three short sections — 「節電になること」 (ChecklistGuide.what),
+     * 「かわりに、できなくなること」 (tradeoff) and, for settings
+     * items only, 「設定画面での手順」 (the numbered steps). The
+     * primary button is the guide's action label and does what the
+     * row tap used to do directly; 「やめる」 closes and changes
+     * nothing. INFO items (temperature) carry no destination, so
+     * their only button is the closing one. The sheet exists only
+     * at the moment of fixing — the rows themselves gain no
+     * permanent text (the v0.3.24 noise audit's line).
+     */
+    private fun showChecklistGuide(entry: SavingChecklist.Entry) {
+        val guide = ChecklistGuide.forItem(entry.item)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(4), dp(24), 0)
+        }
+        body.addView(guideSection("節電になること", guide.what))
+        body.addView(guideSection("かわりに、できなくなること", guide.tradeoff))
+        if (guide.steps.isNotEmpty()) {
+            val stepsText = guide.steps
+                .mapIndexed { i, step -> "${i + 1}. $step" }
+                .joinToString("\n")
+            body.addView(guideSection("設定画面での手順", stepsText))
+        }
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(entry.name)
+            .setView(body)
+        when (guide.kind) {
+            ChecklistGuide.Kind.INFO ->
+                builder.setPositiveButton(guide.actionLabel, null)
+            ChecklistGuide.Kind.IN_APP -> {
+                builder.setNegativeButton("やめる", null)
+                builder.setPositiveButton(guide.actionLabel) { _, _ ->
+                    applyChecklistFix(entry.item)
+                }
+            }
+            ChecklistGuide.Kind.SETTINGS, ChecklistGuide.Kind.APP_SCREEN -> {
+                builder.setNegativeButton("やめる", null)
+                builder.setPositiveButton(guide.actionLabel) { _, _ ->
+                    openChecklistDestination(entry)
+                }
+            }
+        }
+        builder.show()
+    }
+
+    /** One headed section of the guide sheet: a small quiet title
+     *  over its body text, in the same type scale as the rest of
+     *  the app (no new sizes, no decoration). */
+    private fun guideSection(heading: String, text: String): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(4))
+        }
+        col.addView(label(heading, taTitleSmall, literalColor = colorOnSurface, center = false))
+        col.addView(label(text, taBodyMedium, literalColor = colorOnSurfaceVariant, center = false))
+        return col
+    }
+
+    /** The in-app fixes behind the sheet's 「この内容で直す」:
+     *  exactly the two values the app can write itself. */
+    private fun applyChecklistFix(item: SavingChecklist.Item) {
+        when (item) {
+            SavingChecklist.Item.BRIGHTNESS -> fixBrightness()
+            SavingChecklist.Item.SCREEN_TIMEOUT -> fixScreenTimeout()
+            else -> Unit
+        }
+    }
+
+    /**
+     * The destinations a row tap has always led to: the settings
+     * screen that owns the value, the rules screen for this app's
+     * own toggle, the permission flow when the auto-saving row is
+     * waiting on it, and a how-to dialog for temperature — heat has
+     * no settings screen, so the honest destination is an
+     * explanation (the same cooling advice the home HEAT line
+     * gives, spelled out). The v0.3.16 rows each open the settings
+     * screen that owns their switch (Wi-Fi, data usage, location,
+     * NFC, Bluetooth, sound for haptics, display for the dark
+     * theme). Since v0.3.25 an NG row reaches this only through
+     * its explanation sheet's primary button.
+     */
+    private fun openChecklistDestination(entry: SavingChecklist.Entry) {
         when (entry.item) {
             SavingChecklist.Item.BRIGHTNESS, SavingChecklist.Item.SCREEN_TIMEOUT,
             SavingChecklist.Item.DARK_THEME ->
