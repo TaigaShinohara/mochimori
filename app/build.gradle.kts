@@ -23,8 +23,8 @@ android {
         applicationId = "com.taigashinohara.mochimori"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "0.3.25"
+        versionCode = 29
+        versionName = "0.3.26"
     }
 
     signingConfigs {

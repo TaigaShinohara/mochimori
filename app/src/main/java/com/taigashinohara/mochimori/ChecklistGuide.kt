@@ -8,9 +8,14 @@ package com.taigashinohara.mochimori
  *
  * Until v0.3.24 tapping a row jumped straight to a settings screen
  * (or, for temperature, to the cooling dialog), and the user landed
- * on a screen with no idea what to change there. Now a tap on a
- * row that is NOT saving (SavingChecklist.Status.NG) first opens a
- * small sheet with three parts, in the user's own order:
+ * on a screen with no idea what to change there. Since v0.3.25 a
+ * tap first opens a small sheet with three parts, in the user's
+ * own order. v0.3.25 showed it only for rows that were NOT saving
+ * (SavingChecklist.Status.NG); the user then reported 「説明が出ない」
+ * because on their phone most rows were already saving, so their
+ * taps still jumped straight to settings. Since v0.3.26 EVERY row
+ * opens the sheet first (see ChecklistSheet for the per-status
+ * plan):
  *  1. what — what change saves battery, and why, in concrete terms.
  *     For items the app can write itself (brightness, screen-off
  *     timeout — both plain WRITE_SETTINGS values, the same writes
@@ -23,9 +28,9 @@ package com.taigashinohara.mochimori
  *     ones SavingChecklist's tap handler has always used; see
  *     files/DESIGN.md §12.3).
  *
- * The sheet is shown only at the moment of fixing (後出し, B rank):
- * the checklist rows themselves keep their v0.3.24 form — name,
- * measured value, status mark — and gain no permanent text.
+ * The sheet is shown only at the moment of tapping (後出し, B
+ * rank): the checklist rows themselves keep their v0.3.24 form —
+ * name, measured value, status mark — and gain no permanent text.
  *
  * Kind decides the sheet's primary button:
  *  - IN_APP: the app applies the change itself; button
@@ -161,4 +166,79 @@ object ChecklistGuide {
     /** The guide for one checklist item. Every item has one; a
      *  missing entry is a programming error, not a state. */
     fun forItem(item: SavingChecklist.Item): Guide = guides.getValue(item)
+}
+
+/**
+ * How the explanation sheet behaves for one row tap (v0.3.26).
+ *
+ * v0.3.25 opened the sheet only for NG rows; OK / UNKNOWN rows
+ * still jumped straight to their destination, and the user —
+ * whose rows were mostly OK — reported 「説明が出ない」. Now every
+ * status opens the sheet, and this pure plan decides, from the
+ * row's status and the guide's kind, the three things the sheet
+ * needs:
+ *
+ *  - statusLine: one honest line about the CURRENT state, shown
+ *    at the top of the sheet. OK rows say the item is already
+ *    saving; UNKNOWN rows say the state is still being read. NG
+ *    needs no line (the sheet itself is the explanation of a
+ *    problem) and INFO (temperature) has no saving state to
+ *    report.
+ *  - primaryAction: what the sheet's primary button does.
+ *    APPLY_FIX only for an NG row the app can write itself —
+ *    re-applying an already-OK value would be a lie of a button.
+ *    Every other actionable row goes to the destination the tap
+ *    has always led to (the settings screen that owns the value;
+ *    for an OK in-app row that is the display settings, the same
+ *    place its tap went before v0.3.25). INFO closes only.
+ *  - actionLabel: the button's words, matching where it leads.
+ *    An OK in-app row opens a settings screen, so its label is
+ *    「設定を開く」, not the fix label; the auto-saving row still
+ *    waiting on the WRITE_SETTINGS permission opens the
+ *    permission screen, so its label says so.
+ *
+ * Pure function of (status, guide): the unit tests pin all
+ * 4 statuses × 4 kinds.
+ */
+object ChecklistSheet {
+
+    enum class PrimaryAction { APPLY_FIX, OPEN_DESTINATION, CLOSE_ONLY }
+
+    data class Plan(
+        /** One line about the current state, or null for none. */
+        val statusLine: String?,
+        val primaryAction: PrimaryAction,
+        /** The primary button's label. */
+        val actionLabel: String,
+    )
+
+    /** The current-state line for a status, or null when the
+     *  status needs none (NG, INFO). */
+    fun statusLine(status: SavingChecklist.Status): String? = when (status) {
+        SavingChecklist.Status.OK -> "いまは節電できています"
+        SavingChecklist.Status.UNKNOWN -> "いまの状態は確認中です"
+        SavingChecklist.Status.NG, SavingChecklist.Status.INFO -> null
+    }
+
+    fun plan(status: SavingChecklist.Status, guide: ChecklistGuide.Guide): Plan {
+        val action = when {
+            guide.kind == ChecklistGuide.Kind.INFO -> PrimaryAction.CLOSE_ONLY
+            status == SavingChecklist.Status.NG &&
+                guide.kind == ChecklistGuide.Kind.IN_APP -> PrimaryAction.APPLY_FIX
+            else -> PrimaryAction.OPEN_DESTINATION
+        }
+        val label = when {
+            action != PrimaryAction.OPEN_DESTINATION -> guide.actionLabel
+            // An in-app row that is not being fixed here leads to
+            // the display settings screen that owns the value.
+            guide.kind == ChecklistGuide.Kind.IN_APP -> "設定を開く"
+            // The auto-saving row's UNKNOWN is the missing
+            // WRITE_SETTINGS permission; its destination is the
+            // permission screen, not the rules screen.
+            guide.kind == ChecklistGuide.Kind.APP_SCREEN &&
+                status == SavingChecklist.Status.UNKNOWN -> "許可の画面を開く"
+            else -> guide.actionLabel
+        }
+        return Plan(statusLine(status), action, label)
+    }
 }

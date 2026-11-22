@@ -1616,47 +1616,53 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Where a row tap goes (v0.3.25): a row that is NOT saving no
-     * longer jumps straight to its destination — the user asked
-     * 「いきなり設定画面に飛ぶのではなく」 — it first opens the
-     * explanation sheet (showChecklistGuide): what change saves
-     * battery, what it costs, and, for settings items, the taps to
-     * make on the screen that opens. Only the sheet's primary
-     * button proceeds to the destination below (or applies the
-     * in-app fix). Rows that are already saving, still being read,
-     * or info-only keep the direct destinations they have always
-     * had: the settings screen that owns the value, the rules
-     * screen for this app's own toggle, the permission flow when
-     * the auto-saving row is waiting on it, and the cooling dialog
-     * for temperature.
+     * Where a row tap goes: EVERY row first opens the explanation
+     * sheet (showChecklistGuide) — the user asked 「いきなり設定画面
+     * に飛ぶのではなく」. v0.3.25 showed the sheet only for rows
+     * that were NOT saving, but the user's rows were mostly already
+     * saving, so their taps still jumped straight to settings and
+     * they reported 「説明が出ない」; since v0.3.26 the sheet opens
+     * for all statuses, and ChecklistSheet.plan decides how it
+     * behaves: what change saves battery, what it costs, and, for
+     * settings items, the taps to make on the screen that opens.
+     * Only the sheet's primary button proceeds to the destination
+     * below (or applies the in-app fix, for an NG row the app can
+     * write itself).
      */
     private fun onChecklistTap(entry: SavingChecklist.Entry) {
-        if (entry.status == SavingChecklist.Status.NG) {
-            showChecklistGuide(entry)
-        } else {
-            openChecklistDestination(entry)
-        }
+        showChecklistGuide(entry)
     }
 
     /**
-     * The pre-fix explanation sheet (v0.3.25). One quiet dialog in
-     * the app's existing MaterialAlertDialogBuilder style and the
-     * 案E minimal-white manner: the item name as title, then up to
-     * three short sections — 「節電になること」 (ChecklistGuide.what),
+     * The explanation sheet (v0.3.25, all statuses since v0.3.26).
+     * One quiet dialog in the app's existing
+     * MaterialAlertDialogBuilder style and the 案E minimal-white
+     * manner: the item name as title, then — for OK and UNKNOWN
+     * rows — one line about the current state, then up to three
+     * short sections — 「節電になること」 (ChecklistGuide.what),
      * 「かわりに、できなくなること」 (tradeoff) and, for settings
      * items only, 「設定画面での手順」 (the numbered steps). The
-     * primary button is the guide's action label and does what the
-     * row tap used to do directly; 「やめる」 closes and changes
-     * nothing. INFO items (temperature) carry no destination, so
-     * their only button is the closing one. The sheet exists only
-     * at the moment of fixing — the rows themselves gain no
-     * permanent text (the v0.3.24 noise audit's line).
+     * primary button does what ChecklistSheet.plan says: apply the
+     * in-app fix (NG in-app rows only), open the destination the
+     * tap has always led to, or — for INFO items (temperature),
+     * which carry no destination — simply close. 「やめる」 closes
+     * and changes nothing. The sheet exists only at the moment of
+     * tapping — the rows themselves gain no permanent text (the
+     * v0.3.24 noise audit's line).
      */
     private fun showChecklistGuide(entry: SavingChecklist.Entry) {
         val guide = ChecklistGuide.forItem(entry.item)
+        val plan = ChecklistSheet.plan(entry.status, guide)
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(4), dp(24), 0)
+        }
+        val statusLine = plan.statusLine
+        if (statusLine != null) {
+            body.addView(
+                label(statusLine, taBodyMedium, literalColor = colorOnSurface, center = false)
+                    .apply { setPadding(0, dp(8), 0, dp(4)) },
+            )
         }
         body.addView(guideSection("節電になること", guide.what))
         body.addView(guideSection("かわりに、できなくなること", guide.tradeoff))
@@ -1669,18 +1675,18 @@ class MainActivity : AppCompatActivity() {
         val builder = MaterialAlertDialogBuilder(this)
             .setTitle(entry.name)
             .setView(body)
-        when (guide.kind) {
-            ChecklistGuide.Kind.INFO ->
-                builder.setPositiveButton(guide.actionLabel, null)
-            ChecklistGuide.Kind.IN_APP -> {
+        when (plan.primaryAction) {
+            ChecklistSheet.PrimaryAction.CLOSE_ONLY ->
+                builder.setPositiveButton(plan.actionLabel, null)
+            ChecklistSheet.PrimaryAction.APPLY_FIX -> {
                 builder.setNegativeButton("やめる", null)
-                builder.setPositiveButton(guide.actionLabel) { _, _ ->
+                builder.setPositiveButton(plan.actionLabel) { _, _ ->
                     applyChecklistFix(entry.item)
                 }
             }
-            ChecklistGuide.Kind.SETTINGS, ChecklistGuide.Kind.APP_SCREEN -> {
+            ChecklistSheet.PrimaryAction.OPEN_DESTINATION -> {
                 builder.setNegativeButton("やめる", null)
-                builder.setPositiveButton(guide.actionLabel) { _, _ ->
+                builder.setPositiveButton(plan.actionLabel) { _, _ ->
                     openChecklistDestination(entry)
                 }
             }
@@ -1721,7 +1727,7 @@ class MainActivity : AppCompatActivity() {
      * gives, spelled out). The v0.3.16 rows each open the settings
      * screen that owns their switch (Wi-Fi, data usage, location,
      * NFC, Bluetooth, sound for haptics, display for the dark
-     * theme). Since v0.3.25 an NG row reaches this only through
+     * theme). Since v0.3.26 every row reaches this only through
      * its explanation sheet's primary button.
      */
     private fun openChecklistDestination(entry: SavingChecklist.Entry) {
