@@ -72,13 +72,16 @@ object Notifier {
     /**
      * A user-chosen level threshold was reached while discharging
      * (v0.3.22). Same quiet tone as the other alerts: state the
-     * fact, then the current level.
+     * fact, then the current level — but only when the current
+     * level actually differs from the threshold (v0.3.24 noise
+     * audit: with the same number, the body would just restate
+     * the title).
      */
     fun notifyLevel(context: Context, thresholdPercent: Int, levelPercent: Int) {
         post(
             context, ID_LEVEL_BASE + thresholdPercent,
             "残量が ${thresholdPercent}% になりました",
-            "いまの残量は ${levelPercent}% です",
+            if (levelPercent != thresholdPercent) "いまの残量は ${levelPercent}% です" else "",
             android.R.drawable.ic_lock_idle_low_battery,
         )
     }

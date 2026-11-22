@@ -279,6 +279,19 @@ import kotlin.math.roundToLong
  * model-dependent), faster charging, and gentler charging — built
  * from the same standard card/row parts as the rules stages. No
  * new permission; the home no-scroll default state is untouched.
+ * v0.3.24: whole-app noise removal at the user's instruction
+ * ("アプリ全体のノイズを消して"); the audit is
+ * docs/NOISE_REVIEW_v0.3.23.md. Display-level cuts only — no
+ * function, judgement, item or permission changes. The remaining
+ * level now has exactly one home on the home screen (the standing
+ * line under the face): it left the numbers fold and the charging
+ * / emergency reason lines, the charging-full advice line that
+ * restated the reason is gone, the onboarding app-name headline
+ * (duplicated by the toolbar title) is gone, the tips intro line
+ * (a restatement of its title and headings) is gone, the level
+ * notification's body is sent only when it differs from the
+ * title, and the remaining-time lines drop their doubled
+ * （目安） — the 約 already carries it.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -656,7 +669,9 @@ class MainActivity : AppCompatActivity() {
         col.addView(View(this), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         when (page) {
             0 -> {
-                col.addView(label("もち守り", taHeadline, literalColor = colorOnSurface))
+                // v0.3.24 (noise audit): no app-name headline here —
+                // the toolbar title directly above already says
+                // もち守り on this very screen.
                 col.addView(label("何もしなくても、電池が持つ。", taBodyLarge, literalColor = colorOnSurface))
                 col.addView(label("自動でできること", taTitleMedium, literalColor = colorOnSurface))
                 col.addView(label("残量が減ったら、明るさと消灯時間を\n自動で下げます", taBodyLarge, literalColor = colorOnSurface))
@@ -904,7 +919,10 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             BatteryJudge.FixKind.CHARGING_FULL -> {
-                col.addView(label("抜くのがおすすめです", taTitleMedium, literalColor = colorCool))
+                // No extra line (v0.3.24 noise audit): the reason
+                // already carries the unplug advice ("抜くと長持ち
+                // します"); a second line here ("抜くのがおすすめ
+                // です") only restated it.
             }
             else -> {
                 // SAVING with nothing to do shows no extra line: face + state
@@ -1012,23 +1030,29 @@ class MainActivity : AppCompatActivity() {
         val remainingText: String? = when {
             result.state == BatteryJudge.State.UNKNOWN -> null
             s.charging -> if (s.chargeTimeRemainingMs > 0) {
-                "満充電まで${BatteryPace.formatDuration((s.chargeTimeRemainingMs / 60000.0).roundToLong())}（目安）"
+                // v0.3.24: formatDuration already starts with 約 —
+                // a trailing （目安） said the same thing twice.
+                "満充電まで${BatteryPace.formatDuration((s.chargeTimeRemainingMs / 60000.0).roundToLong())}"
             } else {
                 null
             }
             else -> {
                 val minutes = BatteryPace.estimateMinutesToEmpty(BatteryHistory.load(this))
                 if (minutes != null) {
-                    "あと${BatteryPace.formatDuration(minutes)}で0%（目安）"
+                    "あと${BatteryPace.formatDuration(minutes)}で0%"
                 } else {
                     "0%までの時間は計測中"
                 }
             }
         }
-        val numbersText = "残量 ${if (s.levelKnown) "${s.levelPercent}%" else "—"}" +
-            " ・ 温度 ${if (s.tempKnown) "${"%.1f".format(s.tempC)}℃" else "—"}" +
-            " ・ 明るさ ${if (s.brightness >= 0) "${s.brightness}/255" else "—"}" +
-            if (s.voltageMv > 0) " ・ 電圧 ${"%.2f".format(s.voltageMv / 1000f)}V" else ""
+        // v0.3.24 (noise audit): the level is NOT repeated here —
+        // the standing line under the face is its one home. This
+        // line carries the raw values that have no other home.
+        val numbersText = listOfNotNull(
+            "温度 ${if (s.tempKnown) "${"%.1f".format(s.tempC)}℃" else "—"}",
+            "明るさ ${if (s.brightness >= 0) "${s.brightness}/255" else "—"}",
+            if (s.voltageMv > 0) "電圧 ${"%.2f".format(s.voltageMv / 1000f)}V" else null,
+        ).joinToString(" ・ ")
         // Health lines: only what this device actually reported.
         // No design capacity is readable by a general app, so no
         // degradation percentage is ever derived or shown.
@@ -1985,12 +2009,8 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(PAGE_PAD_H), dp(16), dp(PAGE_PAD_H), dp(16))
         }
         col.addView(label("充電のコツ", taTitleLarge, literalColor = colorOnSurface, center = false))
-        col.addView(
-            label(
-                "意外と知らない給電の方法と、電池にやさしい充電のしかた",
-                taBodyMedium, literalColor = colorOnSurfaceVariant, center = false,
-            ),
-        )
+        // v0.3.24 (noise audit): no intro line — it only restated
+        // the title and the group headings below it.
         val groups: List<Pair<String, List<TipUi>>> = listOf(
             "スマホから給電する" to listOf(
                 TipUi(

@@ -60,13 +60,17 @@ object BatteryJudge {
             input.charging -> if (input.levelPercent >= CHARGE_GOOD_PERCENT) {
                 Result(
                     State.CHARGING,
-                    "充電中・${input.levelPercent}%です。抜くと長持ちします",
+                    // v0.3.24 (noise audit): the level is not repeated
+                    // here — the home standing line already shows it.
+                    "充電中です。抜くと長持ちします",
                     FixKind.CHARGING_FULL,
                 )
             } else {
                 Result(
                     State.CHARGING,
-                    "充電中・${input.levelPercent}%まで充電しています",
+                    // v0.3.24: same de-duplication; the difference this
+                    // line adds is the 80% guidance instead.
+                    "充電中です。80%で抜くと長持ちします",
                     FixKind.NONE,
                 )
             }
@@ -77,7 +81,8 @@ object BatteryJudge {
             )
             input.levelPercent <= EMERGENCY_PERCENT -> Result(
                 State.EMERGENCY,
-                "残量がわずかです（${input.levelPercent}%）",
+                // v0.3.24: the level is not repeated (standing line).
+                "残量がわずかです",
                 FixKind.EMERGENCY_SAVER,
             )
             input.brightness >= BRIGHTNESS_NEAR_MAX -> Result(
