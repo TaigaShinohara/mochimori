@@ -1503,15 +1503,15 @@ class BatteryFaceView @JvmOverloads constructor(
      * they are part of the photograph now.
      */
     private fun drawLiquid(canvas: Canvas, palette: Palette, kind: FaceKind) {
-        // v0.4.1: the factor is the new body window's measured
-        // corner radius (84px of its 398px width ≈ 0.211) plus
+        // v0.4.2: the factor is the new body window's measured
+        // corner radius (148px of its 531px width ≈ 0.279) plus
         // the tuck-under pad, over the expanded inner width —
-        // (0.211 × WIN_W + 0.018) / (WIN_W + 0.036) ≈ 0.227, so
+        // (0.279 × WIN_W + 0.018) / (WIN_W + 0.036) ≈ 0.291, so
         // the clip's arc runs concentric with the hole's arc and
         // a near-full liquid leaves no background slivers in the
-        // window's corners. (v0.4.0's body measured 0.26 the
-        // same way.)
-        val innerRadius = innerRect.width() * 0.227f
+        // window's corners. (v0.4.1's body measured 0.227 and
+        // v0.4.0's 0.26 the same way.)
+        val innerRadius = innerRect.width() * 0.291f
 
         // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
         // the BOTTOM by level. Its surface is a plane tilted by the

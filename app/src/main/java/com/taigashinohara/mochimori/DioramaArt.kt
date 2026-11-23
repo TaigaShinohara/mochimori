@@ -32,6 +32,12 @@ import android.graphics.RectF
  *    with a smooth ramp + despill), because the v0.4.0
  *    white-cut body's silhouette read jagged on the device.
  *    The other 31 parts are unchanged.
+ *  - v0.4.2: the body was regenerated once more on green and
+ *    keyed the same way — a wide metal cap sitting flush on
+ *    the body (v0.4.1's narrow cap showed a gap), and a much
+ *    larger, taller window with a recessed inner frame, so
+ *    the liquid reads bigger and the whole thing reads more
+ *    like a battery. The other 31 parts are unchanged.
  *  - the eyes come as canonical pair canvases (880×320): the
  *    open beads were fused in the source and the closed arcs
  *    sat at different fractions, so both pairs were rebuilt
@@ -83,14 +89,16 @@ object DioramaArt {
 
     // The window hole inside the body image, measured from the
     // cut-out's alpha: the one enclosed transparent component.
-    // v0.4.1 re-measured for the regenerated body
-    // (proposals/diorama-parts/body-v2.png, 650×991; window at
-    // px x 125..523, y 515..811) — the new photograph's window
-    // sits lower and narrower than the v0.4.0 body's.
-    const val WIN_L = 0.1923f
-    const val WIN_T = 0.5197f
-    const val WIN_R = 0.8046f
-    const val WIN_B = 0.8184f
+    // v0.4.2 re-measured for the second regenerated body
+    // (proposals/diorama-parts/body-v3.png, 851×1348; the hole
+    // at px x 158..688, y 356..1104) — the window is the inner
+    // opening of the recessed frame (where the green actually
+    // showed through), not the recess's outer rim. Its area is
+    // ~35% of the body image, about 1.9× the v0.4.1 window.
+    const val WIN_L = 0.1857f
+    const val WIN_T = 0.2641f
+    const val WIN_R = 0.8085f
+    const val WIN_B = 0.8190f
 
     /** The part for a backdrop decision. */
     fun backdropPart(d: DioramaScene.Backdrop): Part = when (d) {

@@ -292,7 +292,7 @@ object WidgetFaceRenderer {
                 baseAmp * sin((dx * kf1 - phase0).toDouble()).toFloat() +
                 baseAmp * 0.45f * sin((dx * kf2 + phase0 * 0.63f + 1.7f).toDouble()).toFloat()
         }
-        val radius = win.width() * 0.227f // the new window's measured arc (see BatteryFaceView.drawLiquid)
+        val radius = win.width() * 0.291f // the v0.4.2 window's measured arc (see BatteryFaceView.drawLiquid)
         val clip = Path().apply { addRoundRect(win, radius, radius, Path.Direction.CW) }
         canvas.save()
         canvas.clipPath(clip)
