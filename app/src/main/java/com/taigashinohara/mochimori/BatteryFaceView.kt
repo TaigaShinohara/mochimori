@@ -32,9 +32,11 @@ import kotlin.math.sqrt
 import kotlin.math.tan
 
 /**
- * The big central battery, drawn in code — except the cooling
- * objects, which are generated image assets since v0.3.28
- * (see CoolObjectArt).
+ * The big central battery. Until v0.3.29 it was drawn in code
+ * (the cooling objects became generated image assets in
+ * v0.3.28); since v0.4.0 the whole face is a composition of
+ * generated diorama parts — see the v0.4.0 note below and
+ * [DioramaArt] / [DioramaScene].
  *
  * v0.3.6 redesign, at the user's explicit instruction ("バッテリーは縦に
  * する／中は液体状にアニメーション／できればスマホの角度に合わせて揺
@@ -193,6 +195,30 @@ import kotlin.math.tan
  * - When the OS animator scale is 0, everything is a still image: the
  *   liquid surface is level and frozen, the tilt sensor is never
  *   registered, flames stand upright, bubbles/particles freeze mid-way.
+ *
+ * v0.4.0 diorama composition (the user's decision, approving
+ * the design drafted in proposals/diorama-integration-design.md:
+ * 「この設計で実装して」): the drawn vessel is retired. The face
+ * is now composed, back to front, from generated miniature-
+ * diorama parts ([DioramaArt]): a painted backdrop board and a
+ * ground chosen by the heat, the LIQUID (still this view's
+ * particle liquid, unchanged — level, heat colour, waves,
+ * droplets, bubbles, tilt and splash all survive), the body
+ * photograph — whose window is a real hole, so the liquid shows
+ * through it — the face parts as images (dot-eye beads and
+ * mouths; blinking swaps the eye pair image on the same ~4.6 s
+ * clock), then the state's cast: image flames (breathing via a
+ * small scale/bob transform on the animation clock), the earned
+ * cooling objects (the diorama re-cuts of the same seven; the
+ * air conditioner moved to the upper LEFT and the fan kept at
+ * the middle right, so the two no longer overlap), sweat and
+ * steam at the top heat stage, the lightning part while
+ * charging (it replaces the drawn bolt), and the reward
+ * decorations at heat 0. Which parts appear is decided by the
+ * pure [DioramaScene] from the unchanged [HeatScene] verdict;
+ * the shell, cavity, rim band, cap and outline drawings are
+ * gone — they are IN the body photograph now. The widget still
+ * follows with the same parts (WidgetFaceRenderer).
  *
  * Colours are resolved from the theme's fixed state roles, so Dynamic
  * Color never changes what the faces mean. State is never carried by
@@ -656,55 +682,24 @@ class BatteryFaceView @JvmOverloads constructor(
 
     // ---- State colours from the theme's fixed state roles (fallbacks are
     // the art-direction literals, used only if a theme lacks the attrs).
+    // Since v0.4.0 these colours feed ONLY the liquid (the shell,
+    // cavity, cap and bolt they used to paint are in the body
+    // photograph now).
     private val cool = MaterialColors.getColor(context, R.attr.colorMochiStateCool, Color.rgb(0x02, 0x77, 0xBD))
-    private val onCool = MaterialColors.getColor(context, R.attr.colorOnMochiStateCool, Color.WHITE)
-    private val coolFill = MaterialColors.getColor(context, R.attr.colorMochiStateCoolContainer, Color.rgb(0xE0, 0xF2, 0xFB))
     private val hot = MaterialColors.getColor(context, R.attr.colorMochiWarning, Color.rgb(0xE6, 0x51, 0x00))
-    private val onHot = MaterialColors.getColor(context, R.attr.colorOnMochiWarning, Color.WHITE)
-    private val hotFill = MaterialColors.getColor(context, R.attr.colorMochiWarningContainer, Color.rgb(0xFF, 0xED, 0xD9))
     private val neutral = MaterialColors.getColor(
         context, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.rgb(0x90, 0x90, 0x90),
     )
-    private val neutralFill = MaterialColors.getColor(
-        context, com.google.android.material.R.attr.colorSurfaceVariant, Color.rgb(0xF0, 0xF0, 0xF0),
-    )
-    /** Neutral base for the shell's cavity (see Palette.cavity). */
-    private val cavityBase = MaterialColors.getColor(
-        context, com.google.android.material.R.attr.colorSurfaceContainerHigh, Color.rgb(0xDF, 0xEA, 0xF2),
-    )
 
-    // Derived shades (computed once). (The flame shades that stood
-    // here until v0.3.22 were retired with the flames in v0.3.23.)
-    private val capLight = ColorUtils.blendARGB(neutral, Color.WHITE, 0.65f)
-    private val capMid = ColorUtils.blendARGB(neutral, Color.WHITE, 0.20f)
-    private val capDark = ColorUtils.blendARGB(neutral, Color.BLACK, 0.28f)
-
-    /** One state's palette: everything onDraw needs, shaders built per size. */
-    private inner class Palette(var accent: Int, var container: Int, val onAccent: Int) {
-        /**
-         * Interior of the shell (the unfilled part). A neutral surface
-         * with only a whisper (10%) of the state colour tinted in, in both
-         * themes (v0.3.5: the state container lightened with white turned
-         * a muddy brown-grey on the dark theme). Computed per read since
-         * v0.3.27: the heat palette's accent moves with the heat, and
-         * the cavity tint must follow it.
-         */
-        val cavity: Int get() = ColorUtils.blendARGB(cavityBase, accent, 0.10f)
-        /**
-         * The bolt's fill (v0.3.21): the on-accent colour lightened
-         * toward white — the value the middle stop of the old bolt
-         * gradient carried, now the bolt's single flat colour.
-         */
-        val boltFill: Int get() = ColorUtils.blendARGB(onAccent, Color.WHITE, 0.55f)
+    /** One state's palette: the liquid's accent and its shader. */
+    private inner class Palette(var accent: Int) {
         var liquid: Shader? = null
         fun build(innerTop: Float, innerBottom: Float) {
             // Liquid (v0.3.6): anchored to the inner height, so whatever
             // part of it is visible reads light near the surface and deep
             // at the bottom — depth, not a flat fill. This is the one
             // gradient that survives the v0.3.21 flattening: it is how
-            // the level reads, not decoration. The shell, outline and
-            // bolt that used to be gradients here are flat colours now
-            // (the container role, the accent, boltFill).
+            // the level reads, not decoration.
             liquid = LinearGradient(
                 0f, innerTop, 0f, innerBottom,
                 intArrayOf(
@@ -718,19 +713,18 @@ class BatteryFaceView @JvmOverloads constructor(
         }
     }
 
-    private val coolPalette = Palette(cool, coolFill, onCool)
-    private val hotPalette = Palette(hot, hotFill, onHot)
-    private val neutralPalette = Palette(neutral, neutralFill, neutralFill)
+    private val coolPalette = Palette(cool)
+    private val hotPalette = Palette(hot)
+    private val neutralPalette = Palette(neutral)
 
     /**
      * The heat palette (v0.3.27): while a heat verdict exists, the
      * saving / not-saving faces take their accent from the heat
-     * (HeatScene.liquidColor — pale blue → pale peach → deep red)
-     * and their shell tint blends between the cool and warning
-     * containers on the same axis. The accent is cached so the
-     * liquid shader is rebuilt only when the colour actually moves.
+     * (HeatScene.liquidColor — pale blue → pale peach → deep red).
+     * The accent is cached so the liquid shader is rebuilt only
+     * when the colour actually moves.
      */
-    private val heatPalette = Palette(cool, coolFill, onCool)
+    private val heatPalette = Palette(cool)
     private var heatAccentCache: Int? = null
 
     private fun paletteFor(kind: FaceKind): Palette {
@@ -741,7 +735,6 @@ class BatteryFaceView @JvmOverloads constructor(
                 if (accent != heatAccentCache) {
                     heatAccentCache = accent
                     heatPalette.accent = accent
-                    heatPalette.container = ColorUtils.blendARGB(coolFill, hotFill, heat)
                     if (innerRect.width() > 0f) {
                         heatPalette.build(innerRect.top, innerRect.bottom)
                     }
@@ -756,44 +749,22 @@ class BatteryFaceView @JvmOverloads constructor(
         }
     }
 
-    // ---- Paints (reused). The decorative paints of the glass era
-    // (aura, shadow, gloss, rim, cavity shading, bolt glow, embers,
-    // crystal halo, sparkles) were removed in v0.3.21, and the flame
-    // and crystal paints went with their drawings in v0.3.23.
-    private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val cavityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    // ---- Paints (reused). Only the liquid still paints with
+    // these: since v0.4.0 everything else is a diorama image
+    // (DioramaArt has its own bitmap paint). The shell / cavity /
+    // outline / cap / bolt / face / flame paints that stood here
+    // were retired with their drawings.
     private val liquidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val liquidEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
     }
     private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
-    }
-    private val capPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val boltFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val boltStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeJoin = Paint.Join.ROUND
-    }
-    // The simple face (v0.3.23): dot eyes are filled ovals, the
-    // mouth is a stroked arc / line or a filled oval, by state.
-    private val faceFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val faceStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
-    }
-    // The heat expression (v0.3.27): flat geometric flames are
-    // filled shapes; the cooling objects are image assets since
-    // v0.3.28 (see CoolObjectArt).
-    private val flamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
-    private val boltPath = Path()
     private val wavePath = Path()
     private val edgePath = Path()
     private val clipPath = Path()
-    private val faceRect = RectF() // scratch for the eyes and mouth
-    private val flamePath = Path() // scratch for one geometric flame
-    private val objRect = RectF() // scratch rect (the rim band)
+    private val groundRect = RectF() // scratch rect (the ground band)
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -802,9 +773,7 @@ class BatteryFaceView @JvmOverloads constructor(
     private var sizeScale = 1f
     private val bodyRect = RectF()
     private val innerRect = RectF()
-    private val capRect = RectF()
     private val layerRect = RectF()
-    private var capShader: Shader? = null
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -826,27 +795,25 @@ class BatteryFaceView @JvmOverloads constructor(
         val bodyW = bodyDp.width() * density
         val bodyH = bodyDp.height() * density
         bodyRect.set(left, top, left + bodyW, top + bodyH)
-        val inset = dp(7f) * maxOf(sizeScale, 0.5f)
-        innerRect.set(left + inset, top + inset, left + bodyW - inset, top + bodyH - inset)
-        // Cap: centred on the top edge, overlapping it slightly so it reads
-        // as one piece with the body. Metal, sized in proportion (~44% of
-        // the body width, 13dp tall at full size, scaled down with the face).
-        val capW = bodyW * 0.44f
-        val capH = dp(13f) * maxOf(sizeScale, 0.5f)
-        capRect.set(
-            bodyRect.centerX() - capW / 2f, top - capH + dp(2f),
-            bodyRect.centerX() + capW / 2f, top + dp(2f),
+        // v0.4.0: bodyRect is now the body PHOTOGRAPH's rect, and
+        // the "interior" the liquid lives in is the photograph's
+        // real window hole — its measured fractions inside the
+        // body image (DioramaArt.WIN_*), expanded by ~2% of the
+        // body width on every side so the liquid tucks under the
+        // resin frame and the hole never shows a backdrop sliver.
+        // Everything the liquid physics ever did with innerRect
+        // (waves, particles, bubbles) now happens inside the
+        // window, unchanged.
+        val pad = bodyW * 0.018f
+        innerRect.set(
+            left + bodyW * DioramaArt.WIN_L - pad, top + bodyH * DioramaArt.WIN_T - pad,
+            left + bodyW * DioramaArt.WIN_R + pad, top + bodyH * DioramaArt.WIN_B + pad,
         )
         layerRect.set(0f, 0f, w.toFloat(), h.toFloat())
         coolPalette.build(innerRect.top, innerRect.bottom)
         hotPalette.build(innerRect.top, innerRect.bottom)
         neutralPalette.build(innerRect.top, innerRect.bottom)
         heatPalette.build(innerRect.top, innerRect.bottom)
-        capShader = LinearGradient(
-            capRect.left, 0f, capRect.right, 0f,
-            intArrayOf(capDark, capMid, capLight, capMid, capDark),
-            floatArrayOf(0f, 0.28f, 0.5f, 0.72f, 1f), Shader.TileMode.CLAMP,
-        )
     }
 
     /** Spoken description of the face itself (R9). */
@@ -1145,32 +1112,144 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun drawFace(canvas: Canvas, kind: FaceKind) {
         val palette = paletteFor(kind)
+        val dio = DioramaScene.of(
+            heatScene,
+            charging = kind == FaceKind.CHARGING,
+            saving = kind == FaceKind.SAVING,
+            unknown = kind == FaceKind.UNKNOWN,
+        )
 
-        // No aura and no ground shadow since v0.3.21: the battery
-        // stands on the flat surface, not floating over it.
-        // v0.3.27: the heat expression stands around the body again
-        // — geometric flames (never while charging, never without
-        // a verdict) and the earned cooling objects — drawn first,
-        // so the body overlaps their bases and they read as
-        // gathered around it, never pasted over it.
+        // The diorama composition (v0.4.0), back to front, in the
+        // approved design's order: backdrop board → ground →
+        // liquid → body → face → the state's cast around the body.
+        // DioramaScene decides which parts appear; this only
+        // paints. (Until v0.3.29 the flames and objects stood
+        // BEHIND the drawn body; in the composition they stand
+        // in front of the photograph's base, as they did in the
+        // approved composite tests.)
+        drawBackdrop(canvas, dio)
+        drawGround(canvas, dio)
+        drawLiquid(canvas, palette, kind)
+        DioramaArt.drawInto(canvas, resources, DioramaArt.Part.BODY, bodyRect)
+
+        // The lightning part is the charging state's marker,
+        // drawn over the window as the bolt was (charging only —
+        // never a decoration).
+        if (kind == FaceKind.CHARGING) {
+            drawLightning(canvas)
+        }
+        drawFaceImages(canvas, dio)
+
         val scene = heatScene
         if (scene != null && kind != FaceKind.UNKNOWN) {
-            if (kind != FaceKind.CHARGING && scene.flameLevel > 0) {
-                drawFlames(canvas, scene)
+            if (dio.flame != DioramaScene.Flame.NONE) {
+                drawFlames(canvas, dio.flame)
             }
             if (scene.objects.isNotEmpty()) {
                 drawCoolObjects(canvas, scene)
             }
         }
-        drawBody(canvas, palette, kind)
+        if (dio.sweat) drawSweat(canvas)
+        if (dio.steam) drawSteam(canvas)
+        if (dio.decorations) drawDecorations(canvas)
+    }
 
-        // The bolt is the charging state's marker, drawn over the
-        // liquid as before (charging only — never a decoration).
-        if (kind == FaceKind.CHARGING) {
-            drawBolt(canvas, palette)
-        }
+    /** The backdrop board fills the whole face slot (cover-cropped). */
+    private fun drawBackdrop(canvas: Canvas, dio: DioramaScene.Decision) {
+        DioramaArt.drawCover(canvas, resources, DioramaArt.backdropPart(dio.backdrop), layerRect)
+    }
 
-        drawFaceMarks(canvas, kind, palette)
+    /**
+     * The ground: the miniature base disc, stretched into a wide
+     * band under the body (the squash is deliberate — the disc
+     * photographs are near-square, the ground's job in the
+     * composition is a floor line, exactly as in the approved
+     * composite tests).
+     */
+    private fun drawGround(canvas: Canvas, dio: DioramaScene.Decision) {
+        val w = layerRect.width() * 1.15f
+        val h = layerRect.width() * 0.30f
+        val cx = layerRect.centerX()
+        val cy = bodyRect.bottom + layerRect.height() * 0.015f
+        groundRect.set(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
+        DioramaArt.drawInto(canvas, resources, DioramaArt.groundPart(dio.ground), groundRect)
+    }
+
+    /** The charging marker: the lightning part over the window,
+     *  breathing very slightly on the animation clock. */
+    private fun drawLightning(canvas: Canvas) {
+        val h = bodyRect.height() * 0.34f
+        val pulse = 1f + 0.03f * sin(splashClock * 2.2f).toFloat()
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.LIGHTNING,
+            innerRect.centerX(), innerRect.centerY(), h, h, scale = pulse,
+        )
+    }
+
+    /**
+     * Sweat at the top heat stage: the big drop slides down the
+     * body's left side, the small one sits up by the cap — both
+     * bob gently on the animation clock (a still face freezes
+     * them mid-bob, as it freezes everything).
+     */
+    private fun drawSweat(canvas: Canvas) {
+        val bw = bodyRect.width()
+        val bh = bodyRect.height()
+        val bobA = sin(splashClock * 2.3f).toFloat() * dp(1.6f)
+        val bobB = sin(splashClock * 2.3f + 1.4f).toFloat() * dp(1.6f)
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.SWEAT_BIG,
+            bodyRect.left - bw * 0.015f, bodyRect.top + bh * 0.42f + bobA, bh * 0.30f, bh * 0.30f,
+        )
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.SWEAT_SMALL,
+            bodyRect.right + bw * 0.01f, bodyRect.top + bh * 0.16f + bobB, bh * 0.15f, bh * 0.15f,
+        )
+    }
+
+    /** Steam curling off the terminal cap at the top heat stage:
+     *  a slow rise loop with a soft alpha breathing. */
+    private fun drawSteam(canvas: Canvas) {
+        val bh = bodyRect.height()
+        val rise = frac(splashClock * 0.11f)
+        val alpha = (185f + 60f * sin(splashClock * 1.7f).toFloat()).toInt().coerceIn(0, 255)
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.STEAM,
+            bodyRect.centerX(), bodyRect.top - bh * 0.09f - rise * bh * 0.02f,
+            bh * 0.30f, bh * 0.30f, alpha = alpha,
+        )
+    }
+
+    /**
+     * The heat-0 reward decorations (design §4): the penguin and
+     * the watermelon stand on the ground in front of the body,
+     * the sparkle twinkles and the snowflake drifts in the sky.
+     * Only ever at heat exactly 0 — the middle stages stay bare.
+     */
+    private fun drawDecorations(canvas: Canvas) {
+        val bw = bodyRect.width()
+        val bh = bodyRect.height()
+        val base = bodyRect.bottom
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.PENGUIN,
+            bodyRect.centerX() - bw * 0.50f, base - bh * 0.09f, bh * 0.20f, bh * 0.20f,
+        )
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.WATERMELON,
+            bodyRect.centerX() + bw * 0.53f, base - bh * 0.055f, bw * 0.20f, bw * 0.20f,
+        )
+        val twinkle = 1f + 0.13f * sin(splashClock * 1.9f).toFloat()
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.SPARKLE,
+            layerRect.left + layerRect.width() * 0.15f, layerRect.top + layerRect.height() * 0.10f,
+            bw * 0.12f, bw * 0.12f, scale = twinkle,
+        )
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.Part.SNOWFLAKE,
+            layerRect.left + layerRect.width() * 0.86f,
+            layerRect.top + layerRect.height() * 0.09f + sin(splashClock * 1.3f).toFloat() * dp(1.5f),
+            bw * 0.13f, bw * 0.13f,
+        )
     }
 
     // ---------------- The simple face (v0.3.23) ----------------
@@ -1202,169 +1281,128 @@ class BatteryFaceView @JvmOverloads constructor(
         return 1f - sin(p * Math.PI).toFloat() * 0.88f
     }
 
-    private fun drawFaceMarks(canvas: Canvas, kind: FaceKind, palette: Palette) {
-        val fs = maxOf(sizeScale, 0.55f)
-        val cx = bodyRect.centerX()
-        val bodyTop = bodyRect.top
-        val bodyW = bodyRect.width()
-        val bodyH = bodyRect.height()
-        val faceColor = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.45f)
-        faceFillPaint.color = faceColor
-        faceFillPaint.alpha = 242
-        faceStrokePaint.color = faceColor
-        faceStrokePaint.alpha = 242
-
-        // Dot eyes.
-        val eyeR = dp(3.4f) * fs
-        val eyeY = bodyTop + bodyH * 0.17f
-        val eyeDX = bodyW * 0.155f
-        val squash = blinkScale()
-        for (side in -1..1 step 2) {
-            val ex = cx + side * eyeDX
-            faceRect.set(ex - eyeR, eyeY - eyeR * squash, ex + eyeR, eyeY + eyeR * squash)
-            canvas.drawOval(faceRect, faceFillPaint)
+    /**
+     * The face as images (v0.4.0): the diorama parts on the flat
+     * resin band above the window (the band runs from the cap's
+     * base, ~14% of the body height, to the window frame's top,
+     * ~39% — the face is centred in it: eyes at 25%, mouth at
+     * 34.5%).
+     *
+     * The eyes are the canonical pair canvas (880×320, centres at
+     * 240/640 × 160 — see DioramaArt): drawn 0.50 × body width,
+     * so the beads land 0.227 × body width apart and ~0.085 wide,
+     * a step bolder than the drawn dots they replace (0.031
+     * apart, in the mock-up the beads read larger than the
+     * drawing). Blinking swaps the pair image when the blink
+     * clock's dip (blinkScale, the v0.3.23 clock, unchanged)
+     * passes halfway — a still face keeps its eyes open, as
+     * before. The mouth is the one image DioramaScene chose,
+     * drawn at a per-shape width so the four read at a similar
+     * visual weight.
+     */
+    private fun drawFaceImages(canvas: Canvas, dio: DioramaScene.Decision) {
+        val bw = bodyRect.width()
+        val bh = bodyRect.height()
+        val eyeW = bw * 0.50f
+        val eyeH = eyeW * (320f / 880f)
+        val eyes = if (blinkScale() < 0.55f) DioramaArt.Part.EYES_CLOSED else DioramaArt.Part.EYES_OPEN
+        DioramaArt.drawCentered(
+            canvas, resources, eyes,
+            bodyRect.centerX(), bodyRect.top + bh * 0.25f, eyeW, eyeH,
+        )
+        val mouthW = when (dio.mouth) {
+            DioramaScene.Mouth.SMILE -> bw * 0.22f
+            DioramaScene.Mouth.FLAT -> bw * 0.20f
+            DioramaScene.Mouth.OPEN -> bw * 0.14f
+            DioramaScene.Mouth.ZIGZAG -> bw * 0.25f
         }
-
-        // Mouth. v0.3.27: while a heat verdict exists, the mouth
-        // follows the heat (HeatScene) — a wavy trembling line
-        // when hot, a flat line on the way, the calm smile when
-        // cool. Charging keeps its smile and the unknown face its
-        // flat line, whatever the heat says; without a heat
-        // verdict the v0.3.23 mouths apply unchanged (smile /
-        // small open oval / flat line).
-        val mouthY = bodyTop + bodyH * 0.28f
-        val heatMouth = heatScene?.takeIf { it.heat != null }?.mouth
-        val mouth: HeatScene.Mouth? = when {
-            kind == FaceKind.UNKNOWN -> HeatScene.Mouth.FLAT
-            kind == FaceKind.CHARGING -> HeatScene.Mouth.SMILE
-            heatMouth != null -> heatMouth
-            kind == FaceKind.SAVING -> HeatScene.Mouth.SMILE
-            else -> null // legacy not-saving: the small open oval
-        }
-        when (mouth) {
-            HeatScene.Mouth.SMILE -> {
-                // Calm smile: the lower arc of a small ellipse.
-                val mw = dp(16f) * fs
-                val mh = dp(11f) * fs
-                faceRect.set(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
-                faceStrokePaint.strokeWidth = dp(2.4f) * fs
-                canvas.drawArc(faceRect, 25f, 130f, false, faceStrokePaint)
-            }
-            HeatScene.Mouth.WAVY -> {
-                // Trembling mouth (v0.3.27): a small zigzag — the
-                // geometric wave of the approved mock-up's hot face.
-                val halfW = dp(8f) * fs
-                val amp = dp(2.2f) * fs
-                faceStrokePaint.strokeWidth = dp(2.4f) * fs
-                val seg = (halfW * 2f) / 4f
-                flamePath.reset()
-                flamePath.moveTo(cx - halfW, mouthY)
-                for (i in 1..4) {
-                    val x = cx - halfW + seg * i
-                    val y = if (i % 2 == 1) mouthY - amp else mouthY + amp
-                    if (i == 4) flamePath.lineTo(x, mouthY) else flamePath.lineTo(x, y)
-                }
-                canvas.drawPath(flamePath, faceStrokePaint)
-            }
-            HeatScene.Mouth.FLAT -> {
-                // Flat line: no expression while there is no verdict,
-                // or a face only part-way cool.
-                val half = dp(5.5f) * fs
-                faceStrokePaint.strokeWidth = dp(2.4f) * fs
-                canvas.drawLine(cx - half, mouthY, cx + half, mouthY, faceStrokePaint)
-            }
-            null -> {
-                // Small open mouth: a plain filled oval.
-                val mw = dp(7.5f) * fs
-                val mh = dp(10f) * fs
-                faceRect.set(cx - mw / 2f, mouthY - mh / 2f, cx + mw / 2f, mouthY + mh / 2f)
-                canvas.drawOval(faceRect, faceFillPaint)
-            }
-        }
-        faceFillPaint.alpha = 255
-        faceStrokePaint.alpha = 255
+        DioramaArt.drawCentered(
+            canvas, resources, DioramaArt.mouthPart(dio.mouth),
+            bodyRect.centerX(), bodyRect.top + bh * 0.345f, mouthW, mouthW,
+        )
     }
 
-    // ---------------- Heat expression (v0.3.27) ----------------
+    // ---------------- Heat expression (v0.3.27; diorama parts since v0.4.0) ----------------
     //
-    // Geometric flames and cooling objects, drawn as flat shapes
-    // in the language of the approved mock-up (board v4): simple
-    // silhouettes, pale fills, one quiet line colour. Sizes derive
-    // from the body's rect, so they scale with the face like
-    // everything else. The only motion is the flames' gentle sway
-    // and the fan's slow blades, both on the existing animation
-    // clock (splashClock) — a still face (reduced motion) gets
-    // the same picture, frozen.
+    // The flames and cooling objects around the body. Until
+    // v0.3.29 the flames were drawn shapes and the objects flat
+    // image assets; since v0.4.0 both are diorama parts
+    // (DioramaArt), still at the seats and counts the heat
+    // expression has always used — only the rendering changed.
+    // Sizes derive from the body's rect, so they scale with the
+    // face like everything else. The only motion is the flames'
+    // breathing and the sweat / steam / decoration transforms,
+    // all on the existing animation clock (splashClock) — a
+    // still face (reduced motion) gets the same picture, frozen.
 
     /** Bubble count for a heat activity: 3 (calm) … 8 (hottest). */
     private fun heatBubbleCount(activity: Float): Int =
         (3f + 5f * activity).roundToInt().coerceIn(0, BUBBLE_POOL)
 
-    private fun drawFlames(canvas: Canvas, scene: HeatScene.Scene) {
-        val heat = scene.heat ?: return
-        val level = scene.flameLevel.coerceIn(0, 3)
+    /**
+     * The flames (v0.4.0): one diorama flame image per stage —
+     * small / medium / large, chosen by DioramaScene — standing
+     * at the same anchors, counts and sizes the drawn flames
+     * used (FLAME_ANCHORS / FLAME_COUNTS / FLAME_SCALES, the
+     * mock-up's seats). The drawn flame's sway becomes a gentle
+     * scale breathing plus a small bob on the animation clock:
+     * the photograph must not be sheared or leaned, so it pulses
+     * instead. The images carry their own colours (the stage IS
+     * the size), so the drawn flames' heat-blended palette is
+     * retired with them.
+     */
+    private fun drawFlames(canvas: Canvas, flame: DioramaScene.Flame) {
+        val part = DioramaArt.flamePart(flame) ?: return
+        val level = when (flame) {
+            DioramaScene.Flame.SMALL -> 1
+            DioramaScene.Flame.MEDIUM -> 2
+            DioramaScene.Flame.LARGE -> 3
+            DioramaScene.Flame.NONE -> 0
+        }
         val count = FLAME_COUNTS[level]
-        if (count == 0) return
         val levelScale = FLAME_SCALES[level]
-        // The flames redden with the heat on their own axis (pale
-        // coral → deep red): even a small flame is never blue.
-        val outer = ColorUtils.blendARGB(FLAME_PALE, FLAME_DEEP, heat)
-        val inner = ColorUtils.blendARGB(FLAME_INNER_PALE, FLAME_INNER_DEEP, heat)
         val unit = bodyRect.width() * 0.26f
         for (i in 0 until count) {
             val a = FLAME_ANCHORS[i]
             val bx = bodyRect.left + bodyRect.width() * a[0]
             val by = bodyRect.top + bodyRect.height() * a[1]
             val h = unit * a[2] * levelScale
-            val w = h * 0.62f
-            // A gentle sway on the animation clock — decoration
-            // stays quiet; the flames never thrash.
-            val sway = sin(splashClock * 2.4f + i * 1.7f).toFloat() * unit * 0.07f
-            flamePaint.color = outer
-            flamePathTo(flamePath, bx, by, w, h, sway)
-            canvas.drawPath(flamePath, flamePaint)
-            flamePaint.color = inner
-            flamePathTo(flamePath, bx, by, w * 0.55f, h * 0.58f, sway * 0.5f)
-            canvas.drawPath(flamePath, flamePaint)
-            flamePaint.color = FLAME_CORE
-            flamePathTo(flamePath, bx, by, w * 0.26f, h * 0.30f, sway * 0.3f)
-            canvas.drawPath(flamePath, flamePaint)
+            val pulse = 1f + 0.05f * sin(splashClock * 2.6f + i * 1.7f).toFloat()
+            val bob = sin(splashClock * 2.2f + i * 2.3f).toFloat() * unit * 0.02f
+            DioramaArt.drawCentered(
+                canvas, resources, part,
+                bx, by - h / 2f + bob, h * 0.62f, h, scale = pulse,
+            )
         }
-    }
-
-    /** One geometric flame: a teardrop silhouette standing on
-     *  (bx, by), w wide and h tall, its tip leaning by sway. */
-    private fun flamePathTo(path: Path, bx: Float, by: Float, w: Float, h: Float, sway: Float) {
-        path.reset()
-        path.moveTo(bx - w / 2f, by)
-        path.cubicTo(bx - w / 2f, by - h * 0.45f, bx - w * 0.18f, by - h * 0.62f, bx + sway, by - h)
-        path.cubicTo(bx + w * 0.30f, by - h * 0.60f, bx + w / 2f, by - h * 0.42f, bx + w / 2f, by)
-        path.quadTo(bx, by - h * 0.10f, bx - w / 2f, by)
-        path.close()
     }
 
     private fun drawCoolObjects(canvas: Canvas, scene: HeatScene.Scene) {
         val s = bodyRect.width() * 0.26f
         // Fixed enum order, so overlapping neighbours layer the
-        // same way on every frame. Since v0.3.28 the objects are
-        // generated image assets (CoolObjectArt), drawn at the
-        // same seats and size as the old Canvas shapes.
+        // same way on every frame. The objects are the diorama
+        // re-cuts of the v0.3.28 set (DioramaArt), drawn at the
+        // same seats and size as ever.
         for (obj in HeatScene.CoolObject.values()) {
             if (obj !in scene.objects) continue
             val a = objectAnchor(obj)
             val cx = bodyRect.left + bodyRect.width() * a[0]
             val cy = bodyRect.top + bodyRect.height() * a[1]
-            CoolObjectArt.draw(canvas, resources, obj, cx, cy, s)
+            DioramaArt.drawCentered(canvas, resources, DioramaArt.coolObjectPart(obj), cx, cy, s, s)
         }
     }
 
     /** Each object's fixed seat around the body (fractions of the
      *  body's width / height from its top-left). The ring stays in
      *  the body's neighbourhood — the minimal white around the
-     *  face slot is not touched. */
+     *  face slot is not touched. v0.4.0: the air conditioner moved
+     *  from the upper RIGHT to the upper LEFT and the parasol
+     *  took the upper right (the design's overlap fix: at full
+     *  set the air conditioner and the fan used to stack on the
+     *  right side; now the left column reads aircon / wind
+     *  chime / ice and the right parasol / fan / shaved ice). */
     private fun objectAnchor(obj: HeatScene.CoolObject): FloatArray = when (obj) {
-        HeatScene.CoolObject.PARASOL -> floatArrayOf(-0.19f, 0.06f)
-        HeatScene.CoolObject.AIRCON -> floatArrayOf(1.19f, 0.04f)
+        HeatScene.CoolObject.PARASOL -> floatArrayOf(1.19f, 0.06f)
+        HeatScene.CoolObject.AIRCON -> floatArrayOf(-0.19f, 0.04f)
         HeatScene.CoolObject.WINDBELL -> floatArrayOf(-0.19f, 0.34f)
         HeatScene.CoolObject.FAN -> floatArrayOf(1.19f, 0.40f)
         HeatScene.CoolObject.ICE -> floatArrayOf(-0.19f, 0.68f)
@@ -1430,21 +1468,20 @@ class BatteryFaceView @JvmOverloads constructor(
         bubblePaint.alpha = 255
     }
 
-    private fun drawBody(canvas: Canvas, palette: Palette, kind: FaceKind) {
-        // Corner radii scale with the face (v0.3.19): the full-size
-        // 22dp radius on a flexed-down body would round it into a pill.
-        val radius = dp(22f) * maxOf(sizeScale, 0.5f)
-        val innerRadius = dp(16f) * maxOf(sizeScale, 0.5f)
-        // Shell: the state container colour as an opaque solid
-        // (v0.3.21; it was a translucent glass gradient until
-        // v0.3.20).
-        shellPaint.color = palette.container
-        canvas.drawRoundRect(bodyRect, radius, radius, shellPaint)
-
-        // Pale cavity: the unfilled part of the shell stays a visible
-        // neutral surface in both themes, so the level can be read.
-        cavityPaint.color = palette.cavity
-        canvas.drawRoundRect(innerRect, innerRadius, innerRadius, cavityPaint)
+    /**
+     * The liquid (v0.4.0): the same particle liquid as ever —
+     * surface chain, droplets, bubbles, tilt, splash — but its
+     * vessel is now the body photograph's real window hole:
+     * innerRect IS the window (see onSizeChanged), and the clip's
+     * corner radius is the hole's measured one. The body image is
+     * drawn over the liquid right after this (see drawFace), so
+     * what reads is a liquid sealed inside a miniature battery,
+     * not a drawing of one. The drawn shell, cavity, rim band,
+     * cap and outline this function used to paint are retired —
+     * they are part of the photograph now.
+     */
+    private fun drawLiquid(canvas: Canvas, palette: Palette, kind: FaceKind) {
+        val innerRadius = innerRect.width() * 0.26f
 
         // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
         // the BOTTOM by level. Its surface is a plane tilted by the
@@ -1505,39 +1542,6 @@ class BatteryFaceView @JvmOverloads constructor(
             canvas.restore()
         }
 
-        // Rim band (v0.3.27): a metal band across the body's top,
-        // under the terminal cap — together with the cap it gives
-        // the shell the unmistakable battery read of the approved
-        // mock-up, whose top section is an opaque metal band. Same
-        // metal gradient as the cap, clipped to the body's own
-        // round rect so the band's corners follow the shell. Drawn
-        // over the cavity and the liquid: the band is the shell's
-        // top section, not a window into it. It ends well above
-        // the eyes (17% of the body height).
-        canvas.save()
-        clipPath.reset()
-        clipPath.addRoundRect(bodyRect, radius, radius, Path.Direction.CW)
-        canvas.clipPath(clipPath)
-        capPaint.shader = capShader
-        objRect.set(bodyRect.left, bodyRect.top, bodyRect.right, bodyRect.top + bodyRect.height() * 0.075f)
-        canvas.drawRect(objRect, capPaint)
-        capPaint.shader = null
-        canvas.restore()
-
-        // Terminal cap on top centre: metal gradient (kept — it is
-        // what makes the cap read as metal; its white highlight line
-        // was removed in v0.3.21). Drawn over the body's top edge so
-        // the two read as one piece.
-        capPaint.shader = capShader
-        canvas.drawRoundRect(capRect, dp(4f), dp(4f), capPaint)
-        capPaint.shader = null
-
-        // Outline over everything: the state colour as a solid
-        // stroke (v0.3.21; it was a lightened-top gradient until
-        // v0.3.20, and the specular rim that ran inside it is gone).
-        outlinePaint.color = palette.accent
-        outlinePaint.strokeWidth = dp(4.5f) * maxOf(sizeScale, 0.55f)
-        canvas.drawRoundRect(bodyRect, radius, radius, outlinePaint)
     }
 
     /**
@@ -1576,43 +1580,14 @@ class BatteryFaceView @JvmOverloads constructor(
         bubblePaint.alpha = 255
     }
 
-    // ---------------- Charging bolt (only while charging) ----------------
-
-    private fun drawBolt(canvas: Canvas, palette: Palette) {
-        val cx = bodyRect.centerX()
-        val cy = bodyRect.centerY()
-        val bodyH = bodyRect.height()
-        // Flat fill + a darker edge (v0.3.21: the pulsing glow behind
-        // the bolt and the white edge highlight are removed; the fill
-        // is the single colour Palette.boltFill).
-        buildBoltPath(cx, cy, bodyH)
-        boltFillPaint.color = palette.boltFill
-        canvas.drawPath(boltPath, boltFillPaint)
-        boltStrokePaint.color = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.28f)
-        boltStrokePaint.strokeWidth = dp(1.1f)
-        canvas.drawPath(boltPath, boltStrokePaint)
-    }
-
-    private fun buildBoltPath(cx: Float, cy: Float, bodyH: Float) {
-        // Bolt proportions follow the body's height now that it stands
-        // upright: a tall bolt centred in the shell, over the liquid.
-        val boltH = bodyH * 0.36f
-        boltPath.reset()
-        boltPath.moveTo(cx + dp(4.5f), cy - boltH * 0.5f)
-        boltPath.lineTo(cx - dp(9f), cy + dp(3.5f))
-        boltPath.lineTo(cx - dp(1f), cy + dp(3.5f))
-        boltPath.lineTo(cx - dp(4.5f), cy + boltH * 0.5f)
-        boltPath.lineTo(cx + dp(9f), cy - dp(3.5f))
-        boltPath.lineTo(cx + dp(1f), cy - dp(3.5f))
-        boltPath.close()
-    }
-
+    // The drawn charging bolt that stood here until v0.3.29 was
+    // retired in v0.4.0: the diorama lightning part carries the
+    // charging state now (drawLightning, in drawFace's helpers).
     // The snow crystals and layered flames that carried the state
-    // around the body until v0.3.22 were removed in v0.3.23. The
-    // geometric flames and cooling objects of v0.3.27 (a different
-    // drawing in a different language, driven by the checklist's
-    // heat rather than the judge's verdict) live in the heat
-    // section above. See the class doc.
+    // around the body until v0.3.22 were removed in v0.3.23; the
+    // heat expression of v0.3.27 (driven by the checklist's heat
+    // rather than the judge's verdict) lives in the heat section
+    // above. See the class doc.
 
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
@@ -1669,7 +1644,10 @@ class BatteryFaceView @JvmOverloads constructor(
         // Heat expression (v0.3.27): flame anchors around the body
         // (x / base-y as fractions of the body's width / height,
         // relative size), in the order they appear as the flame
-        // level rises; counts and size scales per level 0…3.
+        // level rises; counts and size scales per level 0…3. Since
+        // v0.4.0 they seat the diorama flame images; the drawn
+        // flames' colour axis (pale coral → deep red) is retired —
+        // each stage's image carries its own colour now.
         private val FLAME_ANCHORS = arrayOf(
             floatArrayOf(0.16f, 0.0f, 1.0f),
             floatArrayOf(0.84f, 0.0f, 1.0f),
@@ -1681,13 +1659,5 @@ class BatteryFaceView @JvmOverloads constructor(
         )
         private val FLAME_COUNTS = intArrayOf(0, 3, 5, 7)
         private val FLAME_SCALES = floatArrayOf(0f, 0.55f, 0.8f, 1.05f)
-        // Flame colours (character-expression only, recorded in
-        // ART_DIRECTION): pale coral at low heat → deep red at
-        // full heat; the inner flame and core follow the same axis.
-        private val FLAME_PALE = Color.rgb(0xF2, 0x99, 0x7A)
-        private val FLAME_DEEP = Color.rgb(0xD4, 0x2A, 0x1E)
-        private val FLAME_INNER_PALE = Color.rgb(0xFF, 0xC9, 0x8A)
-        private val FLAME_INNER_DEEP = Color.rgb(0xF0, 0x76, 0x2B)
-        private val FLAME_CORE = Color.rgb(0xFF, 0xE3, 0xAE)
     }
 }
