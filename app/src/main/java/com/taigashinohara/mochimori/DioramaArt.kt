@@ -27,6 +27,11 @@ import android.graphics.RectF
  *    liquid (still code-drawn) is laid behind the body and
  *    shows through it. The hole's measured position inside
  *    the body image is [WIN_L]…[WIN_B] below.
+ *  - v0.4.1: the body photograph was regenerated on a pure
+ *    green backdrop and chroma-keyed (green-dominance alpha
+ *    with a smooth ramp + despill), because the v0.4.0
+ *    white-cut body's silhouette read jagged on the device.
+ *    The other 31 parts are unchanged.
  *  - the eyes come as canonical pair canvases (880×320): the
  *    open beads were fused in the source and the closed arcs
  *    sat at different fractions, so both pairs were rebuilt
@@ -77,12 +82,15 @@ object DioramaArt {
     }
 
     // The window hole inside the body image, measured from the
-    // cut-out's alpha (proposals/diorama-parts/body.png,
-    // 718×1076): the one enclosed transparent component.
-    const val WIN_L = 0.2465f
-    const val WIN_T = 0.4322f
-    const val WIN_R = 0.8510f
-    const val WIN_B = 0.8151f
+    // cut-out's alpha: the one enclosed transparent component.
+    // v0.4.1 re-measured for the regenerated body
+    // (proposals/diorama-parts/body-v2.png, 650×991; window at
+    // px x 125..523, y 515..811) — the new photograph's window
+    // sits lower and narrower than the v0.4.0 body's.
+    const val WIN_L = 0.1923f
+    const val WIN_T = 0.5197f
+    const val WIN_R = 0.8046f
+    const val WIN_B = 0.8184f
 
     /** The part for a backdrop decision. */
     fun backdropPart(d: DioramaScene.Backdrop): Part = when (d) {

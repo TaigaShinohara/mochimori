@@ -220,6 +220,18 @@ import kotlin.math.tan
  * gone — they are IN the body photograph now. The widget still
  * follows with the same parts (WidgetFaceRenderer).
  *
+ * v0.4.1 minimal scene (the user's on-device verdict on
+ * v0.4.0: 「ゴチャゴチャしてる。まずは装飾無しで本体と液体
+ * だけ表示してみて」): while [MINIMAL_SCENE] is on, the face
+ * draws ONLY the liquid and the body photograph over it — no
+ * backdrop board, no ground, no face parts, no flames, cooling
+ * objects, sweat, steam, decorations or lightning. The slot's
+ * ground is the app's plain surface background again. The full
+ * composition code and [DioramaScene] stay in place below the
+ * flag so the cast can return in stages. The body photograph
+ * itself was also regenerated (green-screen chroma key — see
+ * [DioramaArt]) because its cut-out edge read jagged.
+ *
  * Colours are resolved from the theme's fixed state roles, so Dynamic
  * Color never changes what the faces mean. State is never carried by
  * colour alone: the mouth's shape and the liquid's motion differ too.
@@ -1112,6 +1124,16 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun drawFace(canvas: Canvas, kind: FaceKind) {
         val palette = paletteFor(kind)
+        if (MINIMAL_SCENE) {
+            // v0.4.1 minimal scene: the liquid and the body
+            // photograph, nothing else (see the class doc). The
+            // liquid's clip is the new body's window (onSizeChanged
+            // reads DioramaArt.WIN_*), so the still-animated liquid
+            // shows through the real hole exactly as before.
+            drawLiquid(canvas, palette, kind)
+            DioramaArt.drawInto(canvas, resources, DioramaArt.Part.BODY, bodyRect)
+            return
+        }
         val dio = DioramaScene.of(
             heatScene,
             charging = kind == FaceKind.CHARGING,
@@ -1481,7 +1503,15 @@ class BatteryFaceView @JvmOverloads constructor(
      * they are part of the photograph now.
      */
     private fun drawLiquid(canvas: Canvas, palette: Palette, kind: FaceKind) {
-        val innerRadius = innerRect.width() * 0.26f
+        // v0.4.1: the factor is the new body window's measured
+        // corner radius (84px of its 398px width ≈ 0.211) plus
+        // the tuck-under pad, over the expanded inner width —
+        // (0.211 × WIN_W + 0.018) / (WIN_W + 0.036) ≈ 0.227, so
+        // the clip's arc runs concentric with the hole's arc and
+        // a near-full liquid leaves no background slivers in the
+        // window's corners. (v0.4.0's body measured 0.26 the
+        // same way.)
+        val innerRadius = innerRect.width() * 0.227f
 
         // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
         // the BOTTOM by level. Its surface is a plane tilted by the
@@ -1592,6 +1622,17 @@ class BatteryFaceView @JvmOverloads constructor(
     private fun frac(v: Float): Float = v - kotlin.math.floor(v)
 
     companion object {
+        /**
+         * v0.4.1 minimal scene (the user's instruction: body +
+         * liquid only, no decoration). While true, drawFace and
+         * the widget's still paint just the liquid and the body
+         * photograph; the full diorama composition below stays
+         * compiled and tested so the cast can return in stages
+         * by turning this off. (WidgetFaceRenderer keeps its own
+         * copy of the switch — the two faces must agree.)
+         */
+        const val MINIMAL_SCENE = true
+
         /**
          * The battery body's rect (dp) inside a slot of the given
          * size — the single source for the face's geometry (v0.3.19).

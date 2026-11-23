@@ -50,10 +50,21 @@ import kotlin.math.sin
  * face's gradient stops, a per-state wave amplitude, fixed-seed
  * bubbles and the bright meniscus line — now inside the body
  * photograph's real window instead of the drawn cavity.
+ *
+ * v0.4.1: the still follows the live face's minimal scene —
+ * while [MINIMAL_SCENE] is on it paints ONLY the liquid and
+ * the (regenerated, chroma-keyed) body photograph, over the
+ * widget panel's own background. The full composition below
+ * stays in place so the cast can return in stages; this
+ * switch and BatteryFaceView.MINIMAL_SCENE must agree.
  */
 object WidgetFaceRenderer {
 
     private enum class Kind { SAVING, HOT, CHARGING, UNKNOWN }
+
+    /** v0.4.1 minimal scene — the widget's copy of
+     *  BatteryFaceView.MINIMAL_SCENE (the two must agree). */
+    private const val MINIMAL_SCENE = true
 
     // Virtual canvas the face is composed in; the bitmap is this space
     // scaled up. Proportions mirror BatteryFaceView.onSizeChanged.
@@ -139,6 +150,15 @@ object WidgetFaceRenderer {
             body.left + bodyW * DioramaArt.WIN_R + pad,
             body.top + bodyH * DioramaArt.WIN_B + pad,
         )
+
+        if (MINIMAL_SCENE) {
+            // v0.4.1 minimal scene: the liquid and the body
+            // photograph, nothing else — the still's counterpart
+            // of BatteryFaceView's minimal branch.
+            drawLiquid(canvas, kind, level, accent, win, u)
+            DioramaArt.drawInto(canvas, res, DioramaArt.Part.BODY, body)
+            return
+        }
 
         val dio = DioramaScene.of(
             scene,
@@ -272,7 +292,7 @@ object WidgetFaceRenderer {
                 baseAmp * sin((dx * kf1 - phase0).toDouble()).toFloat() +
                 baseAmp * 0.45f * sin((dx * kf2 + phase0 * 0.63f + 1.7f).toDouble()).toFloat()
         }
-        val radius = win.width() * 0.26f
+        val radius = win.width() * 0.227f // the new window's measured arc (see BatteryFaceView.drawLiquid)
         val clip = Path().apply { addRoundRect(win, radius, radius, Path.Direction.CW) }
         canvas.save()
         canvas.clipPath(clip)
