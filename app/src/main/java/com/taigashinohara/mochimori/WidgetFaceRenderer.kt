@@ -8,11 +8,13 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.view.ContextThemeWrapper
 import androidx.core.graphics.ColorUtils
 import com.google.android.material.color.MaterialColors
+import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -62,14 +64,17 @@ object WidgetFaceRenderer {
 
     private enum class Kind { SAVING, HOT, CHARGING, UNKNOWN }
 
-    /** v0.4.1 minimal scene — the widget's copy of
-     *  BatteryFaceView.MINIMAL_SCENE (the two must agree). */
-    private const val MINIMAL_SCENE = true
+    /** Integrated battery + pedestal base with liquid, face, and charging bolt.
+     *  Must stay aligned with BatteryFaceView.INTEGRATED_STAGE. */
+    private const val INTEGRATED_STAGE = true
+
+    /** Legacy v0.4.1 minimal scene (used only when INTEGRATED_STAGE is false). */
+    private const val MINIMAL_SCENE = false
 
     // Virtual canvas the face is composed in; the bitmap is this space
-    // scaled up. Proportions mirror BatteryFaceView.onSizeChanged.
-    private const val VW = 150f
-    private const val VH = 190f
+    // scaled up. Square 160x160 matches widget_mochi.xml's 76dp x 76dp slot.
+    private const val VW = 160f
+    private const val VH = 160f
 
     fun render(
         context: Context,
@@ -84,8 +89,8 @@ object WidgetFaceRenderer {
             BatteryJudge.State.UNKNOWN -> Kind.UNKNOWN
         }
         val density = context.resources.displayMetrics.density
-        // 60dp x 76dp on screen, rendered at 2x for crispness.
-        val pxW = (60f * density * 2f).toInt().coerceAtLeast(120)
+        // 76dp x 76dp on screen, rendered at 2x for crispness.
+        val pxW = (76f * density * 2f).toInt().coerceAtLeast(152)
         val pxH = (pxW * VH / VW).toInt()
         val bitmap = Bitmap.createBitmap(pxW, pxH, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -123,7 +128,48 @@ object WidgetFaceRenderer {
             accent = HeatScene.liquidColor(heat)
         }
 
-        // ---- Geometry (mirrors BatteryFaceView.onSizeChanged) ----
+        val dio = DioramaScene.of(
+            scene,
+            charging = kind == Kind.CHARGING,
+            saving = kind == Kind.SAVING,
+            unknown = kind == Kind.UNKNOWN,
+        )
+
+        if (INTEGRATED_STAGE) {
+            val spec = DioramaArt.stageSpec(dio.ground)
+            val margin = 4f
+            val availW = VW - margin * 2f
+            val availH = VH - margin * 2f
+            var stageW = availW
+            var stageH = stageW / spec.aspectRatio
+            if (stageH > availH) {
+                stageH = availH
+                stageW = stageH * spec.aspectRatio
+            }
+            val stage = RectF(
+                (VW - stageW) / 2f, (VH - stageH) / 2f,
+                (VW + stageW) / 2f, (VH + stageH) / 2f,
+            )
+            val win = RectF()
+            DioramaArt.computeWindowRect(stage, spec, win)
+            val bodyW = stageW * spec.bodyWidthFrac
+            val k = (bodyW / 156f).coerceAtLeast(0.32f)
+            val u: (Float) -> Float = { v -> v * k }
+
+            drawLiquid(canvas, kind, level, accent, win, spec.winRadiusRatio, u)
+            DioramaArt.drawInto(canvas, res, spec.bodyPart, stage)
+            if (kind == Kind.CHARGING) {
+                val h = win.height() * 0.58f
+                DioramaArt.drawCentered(
+                    canvas, res, DioramaArt.Part.LIGHTNING,
+                    win.centerX(), win.centerY(), h, h,
+                )
+            }
+            DioramaArt.drawStageFace(canvas, res, stage, spec, DioramaArt.Part.EYES_OPEN, dio.mouth)
+            return
+        }
+
+        // ---- Geometry (legacy separate body) ----
         val topZone = 34f
         val bottomZone = 12f
         val availH = VH - topZone - bottomZone
@@ -152,20 +198,10 @@ object WidgetFaceRenderer {
         )
 
         if (MINIMAL_SCENE) {
-            // v0.4.1 minimal scene: the liquid and the body
-            // photograph, nothing else — the still's counterpart
-            // of BatteryFaceView's minimal branch.
-            drawLiquid(canvas, kind, level, accent, win, u)
+            drawLiquid(canvas, kind, level, accent, win, 0.291f, u)
             DioramaArt.drawInto(canvas, res, DioramaArt.Part.BODY, body)
             return
         }
-
-        val dio = DioramaScene.of(
-            scene,
-            charging = kind == Kind.CHARGING,
-            saving = kind == Kind.SAVING,
-            unknown = kind == Kind.UNKNOWN,
-        )
 
         // ---- The diorama composition, back to front ----
         DioramaArt.drawCover(canvas, res, DioramaArt.backdropPart(dio.backdrop), RectF(0f, 0f, VW, VH))
@@ -178,7 +214,7 @@ object WidgetFaceRenderer {
                 RectF(VW / 2f - gw / 2f, gcy - gh / 2f, VW / 2f + gw / 2f, gcy + gh / 2f),
             )
         }
-        drawLiquid(canvas, kind, level, accent, win, u)
+        drawLiquid(canvas, kind, level, accent, win, 0.291f, u)
         DioramaArt.drawInto(canvas, res, DioramaArt.Part.BODY, body)
 
         // Charging: the lightning part over the window.
@@ -268,88 +304,207 @@ object WidgetFaceRenderer {
      */
     private fun drawLiquid(
         canvas: Canvas, kind: Kind, level: Int, accent: Int,
-        win: RectF, u: (Float) -> Float,
+        win: RectF, radiusRatio: Float, u: (Float) -> Float,
     ) {
-        val fillH = win.height() * (level / 100f)
-        if (fillH <= 0.5f) return
+        if (win.width() <= 0f || win.height() <= 0f) return
         val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
         }
-        val baseAmp = when (kind) {
-            Kind.HOT -> u(2.1f)
-            Kind.CHARGING -> u(1.5f)
-            Kind.SAVING -> u(1.1f)
-            Kind.UNKNOWN -> 0f
-        }
-        val phase0 = 0.9f
-        val kf1 = (2 * Math.PI / (win.width() * 0.9f)).toFloat()
-        val kf2 = (2 * Math.PI / (win.width() * 0.45f)).toFloat()
-        fun surfaceY(x: Float): Float {
-            val dx = x - win.left
-            val baseY = win.bottom - fillH
-            return baseY +
-                baseAmp * sin((dx * kf1 - phase0).toDouble()).toFloat() +
-                baseAmp * 0.45f * sin((dx * kf2 + phase0 * 0.63f + 1.7f).toDouble()).toFloat()
-        }
-        val radius = win.width() * 0.291f // the v0.4.2 window's measured arc (see BatteryFaceView.drawLiquid)
+        val radius = win.width() * radiusRatio
         val clip = Path().apply { addRoundRect(win, radius, radius, Path.Direction.CW) }
         canvas.save()
         canvas.clipPath(clip)
-        val wave = Path()
-        wave.moveTo(win.left - 2f, win.bottom + 2f)
-        val steps = 24
-        for (i in 0..steps) {
-            val x = win.left + win.width() * (i / steps.toFloat())
-            wave.lineTo(x, surfaceY(x))
+
+        // Subtle glass cavity cylindrical shading (visible above liquid too)
+        fill.shader = LinearGradient(
+            win.left, 0f, win.right, 0f,
+            intArrayOf(
+                Color.argb(38, 10, 24, 38),
+                Color.argb(8, 10, 24, 38),
+                Color.TRANSPARENT,
+                Color.argb(10, 10, 24, 38),
+                Color.argb(44, 10, 24, 38),
+            ),
+            floatArrayOf(0f, 0.14f, 0.50f, 0.86f, 1f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(win, fill)
+        fill.shader = null
+
+        val fillH = win.height() * (level / 100f)
+        if (fillH > 0.5f) {
+            val isWarm = Color.red(accent) > Color.blue(accent) + 25
+            val lightTint = if (isWarm) Color.rgb(0xFF, 0xF2, 0xD8) else Color.rgb(0xE8, 0xF8, 0xFF)
+            val baseAmp = when (kind) {
+                Kind.HOT -> u(2.1f)
+                Kind.CHARGING -> u(1.5f)
+                Kind.SAVING -> u(1.1f)
+                Kind.UNKNOWN -> 0f
+            }
+            val phase0 = 0.9f
+            val kf1 = (2 * Math.PI / (win.width() * 0.9f)).toFloat()
+            val kf2 = (2 * Math.PI / (win.width() * 0.45f)).toFloat()
+            val baseY = win.bottom - fillH
+            val depthH = win.width() * 0.065f
+            val climbMax = u(2.0f)
+
+            val steps = 28
+            val xs = FloatArray(steps + 1)
+            val fy = FloatArray(steps + 1)
+            val by = FloatArray(steps + 1)
+            for (i in 0..steps) {
+                val t = i / steps.toFloat()
+                val x = win.left + win.width() * t
+                val dx = x - win.left
+                val climb = -climbMax * exp((-min(t, 1f - t) / 0.06f).toDouble()).toFloat()
+                xs[i] = x
+                fy[i] = baseY +
+                    baseAmp * sin((dx * kf1 - phase0).toDouble()).toFloat() +
+                    baseAmp * 0.45f * sin((dx * kf2 + phase0 * 0.63f + 1.7f).toDouble()).toFloat() + climb
+                by[i] = baseY - depthH +
+                    baseAmp * 0.80f * sin((dx * kf1 - phase0 + 1.55f).toDouble()).toFloat() +
+                    baseAmp * 0.35f * sin((dx * kf2 + phase0 * 0.63f + 3.2f).toDouble()).toFloat() + climb * 0.75f
+            }
+
+            // Back liquid surface
+            val backWave = Path().apply {
+                moveTo(win.left - 2f, win.bottom + 2f)
+                lineTo(win.left - 2f, by[0])
+                for (i in 1..steps) lineTo(xs[i], by[i])
+                lineTo(win.right + 2f, win.bottom + 2f)
+                close()
+            }
+            fill.color = ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, Color.BLACK, 0.14f), 145)
+            canvas.drawPath(backWave, fill)
+            fill.alpha = 255
+
+            // Front liquid body (vertical depth + cylinder curvature + caustic glow)
+            val wave = Path().apply {
+                moveTo(win.left - 2f, win.bottom + 2f)
+                lineTo(win.left - 2f, fy[0])
+                for (i in 1..steps) lineTo(xs[i], fy[i])
+                lineTo(win.right + 2f, win.bottom + 2f)
+                close()
+            }
+            fill.shader = LinearGradient(
+                0f, win.top, 0f, win.bottom,
+                intArrayOf(
+                    ColorUtils.blendARGB(accent, lightTint, 0.42f),
+                    ColorUtils.blendARGB(accent, lightTint, 0.14f),
+                    accent,
+                    ColorUtils.blendARGB(accent, Color.BLACK, 0.34f),
+                ),
+                floatArrayOf(0f, 0.32f, 0.72f, 1f), Shader.TileMode.CLAMP,
+            )
+            canvas.drawPath(wave, fill)
+            fill.shader = LinearGradient(
+                win.left, 0f, win.right, 0f,
+                intArrayOf(
+                    Color.argb(72, 0, 10, 20),
+                    Color.argb(62, 255, 255, 255),
+                    Color.TRANSPARENT,
+                    Color.TRANSPARENT,
+                    Color.argb(44, 255, 255, 255),
+                    Color.argb(82, 0, 10, 20),
+                ),
+                floatArrayOf(0f, 0.08f, 0.20f, 0.82f, 0.92f, 1f), Shader.TileMode.CLAMP,
+            )
+            canvas.drawPath(wave, fill)
+            fill.shader = RadialGradient(
+                win.left + win.width() * 0.48f, win.top + win.height() * 0.78f,
+                maxOf(win.width() * 0.56f, 1f),
+                intArrayOf(
+                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, lightTint, 0.72f), 85),
+                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, lightTint, 0.40f), 32),
+                    Color.TRANSPARENT,
+                ),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
+            )
+            canvas.drawPath(wave, fill)
+            fill.shader = null
+
+            // 3D Meniscus top surface ribbon
+            val ribbon = Path().apply {
+                moveTo(xs[0], by[0])
+                for (i in 1..steps) lineTo(xs[i], by[i])
+                for (i in steps downTo 0) lineTo(xs[i], fy[i])
+                close()
+            }
+            fill.color = ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, lightTint, 0.56f), 110)
+            canvas.drawPath(ribbon, fill)
+            fill.alpha = 255
+
+            // 3D rim-lit specular bubbles
+            if (kind != Kind.UNKNOWN && fillH > u(18f)) {
+                val fillCol = ColorUtils.blendARGB(accent, Color.WHITE, 0.45f)
+                val rimCol = ColorUtils.blendARGB(accent, Color.WHITE, 0.86f)
+                stroke.strokeWidth = maxOf(u(0.7f), 0.7f)
+                val seeds = floatArrayOf(0.11f, 0.53f, 0.83f, 0.31f, 0.67f, 0.23f, 0.97f, 0.41f, 0.19f, 0.73f, 0.59f, 0.37f)
+                val count = when (kind) {
+                    Kind.HOT -> 12
+                    Kind.CHARGING -> 8
+                    else -> 4
+                }
+                for (i in 0 until count) {
+                    val seed = seeds[i]
+                    val xF = 0.08f + 0.84f * frac(seed * 7.31f + i * 0.3819f)
+                    val yF = frac(seed * 3.97f + i * 0.618f)
+                    val x = win.left + win.width() * xF
+                    val idx = (xF * steps).toInt().coerceIn(0, steps)
+                    val y = (win.bottom - u(4f)) - yF * (fillH - u(10f))
+                    val r = u(0.9f + 1.4f * frac(seed * 3.7f))
+                    if (y > fy[idx] + r + u(2f)) {
+                        fill.color = fillCol
+                        fill.alpha = 55
+                        canvas.drawCircle(x, y, r, fill)
+                        stroke.color = rimCol
+                        stroke.alpha = 155
+                        canvas.drawCircle(x, y, r, stroke)
+                        fill.color = Color.WHITE
+                        fill.alpha = 215
+                        canvas.drawCircle(x - r * 0.32f, y - r * 0.32f, maxOf(0.5f, r * 0.30f), fill)
+                    }
+                }
+                fill.alpha = 255
+                stroke.alpha = 255
+            }
+
+            // Crisp bright front meniscus line
+            val edge = Path().apply {
+                moveTo(xs[0], fy[0])
+                for (i in 1..steps) lineTo(xs[i], fy[i])
+            }
+            stroke.color = ColorUtils.blendARGB(accent, Color.WHITE, 0.80f)
+            stroke.alpha = 235
+            stroke.strokeWidth = u(2.0f)
+            canvas.drawPath(edge, stroke)
+            stroke.alpha = 255
         }
-        wave.lineTo(win.right + 2f, win.bottom + 2f)
-        wave.close()
+
+        // Front glass tube vertical highlights
+        val glX = win.left + win.width() * 0.10f
+        val glW = win.width() * 0.078f
         fill.shader = LinearGradient(
             0f, win.top, 0f, win.bottom,
-            intArrayOf(
-                ColorUtils.blendARGB(accent, Color.WHITE, 0.50f),
-                ColorUtils.blendARGB(accent, Color.WHITE, 0.16f),
-                accent,
-                ColorUtils.blendARGB(accent, Color.BLACK, 0.20f),
-            ),
-            floatArrayOf(0f, 0.35f, 0.72f, 1f), Shader.TileMode.CLAMP,
+            intArrayOf(Color.TRANSPARENT, Color.argb(84, 255, 255, 255), Color.argb(52, 255, 255, 255), Color.TRANSPARENT),
+            floatArrayOf(0.05f, 0.18f, 0.80f, 0.94f), Shader.TileMode.CLAMP,
         )
-        canvas.drawPath(wave, fill)
+        canvas.drawRoundRect(
+            RectF(glX, win.top + win.height() * 0.05f, glX + glW, win.bottom - win.height() * 0.07f),
+            glW * 0.5f, glW * 0.5f, fill,
+        )
+        val grX = win.right - win.width() * 0.12f
+        val grW = win.width() * 0.034f
+        fill.shader = LinearGradient(
+            0f, win.top, 0f, win.bottom,
+            intArrayOf(Color.TRANSPARENT, Color.argb(46, 255, 255, 255), Color.argb(28, 255, 255, 255), Color.TRANSPARENT),
+            floatArrayOf(0.08f, 0.24f, 0.78f, 0.92f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(
+            RectF(grX, win.top + win.height() * 0.09f, grX + grW, win.bottom - win.height() * 0.09f),
+            grW * 0.5f, grW * 0.5f, fill,
+        )
         fill.shader = null
-        // A few still bubbles (fixed seeds, only under the surface).
-        if (kind != Kind.UNKNOWN && fillH > u(24f)) {
-            fill.color = ColorUtils.blendARGB(accent, Color.WHITE, 0.55f)
-            val seeds = floatArrayOf(0.11f, 0.53f, 0.83f, 0.31f, 0.67f, 0.23f, 0.97f, 0.41f)
-            val count = when (kind) {
-                Kind.HOT -> 8
-                Kind.CHARGING -> 7
-                else -> 3
-            }
-            for (i in 0 until count) {
-                val seed = seeds[i]
-                val xF = frac(seed * 7.31f)
-                val yF = frac(seed * 3.97f)
-                val x = win.left + win.width() * xF
-                val y = (win.bottom - u(3f)) - yF * (fillH - u(12f))
-                if (y > surfaceY(x) + u(2f)) {
-                    fill.alpha = 110
-                    canvas.drawCircle(x, y, u(0.8f) + u(1.6f) * frac(seed * 3.7f), fill)
-                }
-            }
-            fill.alpha = 255
-        }
-        // Bright meniscus line along the surface.
-        val edge = Path()
-        for (i in 0..steps) {
-            val x = win.left + win.width() * (i / steps.toFloat())
-            if (i == 0) edge.moveTo(x, surfaceY(x)) else edge.lineTo(x, surfaceY(x))
-        }
-        stroke.color = ColorUtils.blendARGB(accent, Color.WHITE, 0.65f)
-        stroke.alpha = 235
-        stroke.strokeWidth = u(2.3f)
-        canvas.drawPath(edge, stroke)
-        stroke.alpha = 255
         canvas.restore()
     }
 

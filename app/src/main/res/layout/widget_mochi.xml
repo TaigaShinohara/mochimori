@@ -18,7 +18,7 @@
 
     <ImageView
         android:id="@+id/widget_face"
-        android:layout_width="60dp"
+        android:layout_width="76dp"
         android:layout_height="76dp"
         android:contentDescription="バッテリーの状態"
         android:scaleType="fitCenter" />

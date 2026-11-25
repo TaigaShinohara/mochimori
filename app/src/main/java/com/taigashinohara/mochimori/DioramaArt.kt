@@ -54,6 +54,7 @@ object DioramaArt {
 
     enum class Part(val res: Int) {
         BODY(R.drawable.dio_body),
+        BODY_GRASS(R.drawable.dio_body_grass),
         EYES_OPEN(R.drawable.dio_eyes_open),
         EYES_CLOSED(R.drawable.dio_eyes_closed),
         MOUTH_SMILE(R.drawable.dio_mouth_smile),
@@ -99,6 +100,89 @@ object DioramaArt {
     const val WIN_T = 0.2641f
     const val WIN_R = 0.8085f
     const val WIN_B = 0.8190f
+
+    /**
+     * Geometry and face-placement contract for one integrated
+     * battery + pedestal base image (window cut out, no face).
+     * Adding the hot "battery + ground" asset later is a single
+     * [StageSpec] entry wired into [stageSpec].
+     */
+    data class StageSpec(
+        val bodyPart: Part,
+        /** Natural image aspect ratio (width / height). */
+        val aspectRatio: Float,
+        /** Enclosed transparent window hole inside the image (0..1 fractions). */
+        val winL: Float,
+        val winT: Float,
+        val winR: Float,
+        val winB: Float,
+        /** Tuck-under pad as a fraction of the battery body width. */
+        val winPadOfBodyW: Float,
+        /** Window clip corner radius / expanded window width. */
+        val winRadiusRatio: Float,
+        /** Battery body horizontal centre & width as fractions of image width. */
+        val bodyCenterX: Float,
+        val bodyWidthFrac: Float,
+        /** Eye pair vertical centre as a fraction of image height. */
+        val eyesCenterY: Float,
+        /** Mouth vertical offset below eyes, as a fraction of body width. */
+        val mouthOffsetYOfBodyW: Float,
+    )
+
+    // Integrated battery + grass pedestal (759x718, magenta-keyed + despill).
+    val STAGE_GRASS = StageSpec(
+        bodyPart = Part.BODY_GRASS,
+        aspectRatio = 759f / 718f,
+        winL = 0.4032f,
+        winT = 0.2535f,
+        winR = 0.5995f,
+        winB = 0.6114f,
+        winPadOfBodyW = 0.020f,
+        winRadiusRatio = 0.295f,
+        bodyCenterX = 380f / 759f,
+        bodyWidthFrac = 248f / 759f,
+        eyesCenterY = 120f / 718f,
+        mouthOffsetYOfBodyW = 0.056f,
+    )
+
+    /**
+     * Integrated base asset for a ground decision.
+     * Until the hot "battery + ground" asset is generated, every
+     * stage resolves to [STAGE_GRASS]; once added, switch
+     * DRY / DESERT here without touching the view or widget.
+     */
+    fun stageSpec(ground: DioramaScene.Ground): StageSpec = when (ground) {
+        DioramaScene.Ground.GREEN -> STAGE_GRASS
+        DioramaScene.Ground.DRY, DioramaScene.Ground.DESERT -> STAGE_GRASS
+    }
+
+    // Approved face proportions relative to the battery body width (bw).
+    const val SPLIT_EYE_DIAM_OF_BW = 0.095f
+    const val SPLIT_EYE_SEP_OF_BW = 0.40f
+    private const val EYE_OPEN_BEAD_PX = 121f
+    private const val EYE_LEFT_CX_PX = 240f
+    private const val EYE_RIGHT_CX_PX = 640f
+
+    /** Per-mouth width as a fraction of the battery body width. */
+    fun mouthWidthOfBody(mouth: DioramaScene.Mouth): Float = when (mouth) {
+        DioramaScene.Mouth.SMILE -> 0.142f
+        DioramaScene.Mouth.FLAT -> 0.138f
+        DioramaScene.Mouth.OPEN -> 0.128f
+        DioramaScene.Mouth.ZIGZAG -> 0.205f
+    }
+
+    /** Computes the liquid window rect (with tuck-under pad) inside [stageRect]. */
+    fun computeWindowRect(stageRect: RectF, spec: StageSpec, out: RectF) {
+        val sw = stageRect.width()
+        val sh = stageRect.height()
+        val pad = sw * spec.bodyWidthFrac * spec.winPadOfBodyW
+        out.set(
+            stageRect.left + sw * spec.winL - pad,
+            stageRect.top + sh * spec.winT - pad,
+            stageRect.left + sw * spec.winR + pad,
+            stageRect.top + sh * spec.winB + pad,
+        )
+    }
 
     /** The part for a backdrop decision. */
     fun backdropPart(d: DioramaScene.Backdrop): Part = when (d) {
@@ -210,5 +294,54 @@ object DioramaArt {
         )
         paint.alpha = 255
         canvas.drawBitmap(bmp, src, rect, paint)
+    }
+
+    /**
+     * Draws the left and right halves of a canonical 880x320 eye-pair
+     * bitmap ([Part.EYES_OPEN] or [Part.EYES_CLOSED]) separately so the
+     * eye diameter ([SPLIT_EYE_DIAM_OF_BW]) and centre-to-centre
+     * separation ([SPLIT_EYE_SEP_OF_BW]) match the approved diorama
+     * proportions without modifying the source eye assets.
+     */
+    fun drawSplitEyes(
+        canvas: Canvas, resources: Resources, part: Part,
+        cx: Float, cy: Float, bodyW: Float,
+    ) {
+        val bmp = bitmap(resources, part) ?: return
+        val bw = bmp.width
+        val bh = bmp.height
+        val halfW = bw / 2
+        if (halfW <= 0 || bh <= 0 || bodyW <= 0f) return
+        val scale = (bodyW * SPLIT_EYE_DIAM_OF_BW) / EYE_OPEN_BEAD_PX
+        val dw = halfW * scale
+        val dh = bh * scale
+        val sep = bodyW * SPLIT_EYE_SEP_OF_BW
+        val topY = cy - dh / 2f
+        paint.alpha = 255
+
+        val leftX = (cx - sep / 2f) - (EYE_LEFT_CX_PX / halfW) * dw
+        src.set(0, 0, halfW, bh)
+        dst.set(leftX, topY, leftX + dw, topY + dh)
+        canvas.drawBitmap(bmp, src, dst, paint)
+
+        val rightX = (cx + sep / 2f) - ((EYE_RIGHT_CX_PX - halfW) / halfW) * dw
+        src.set(halfW, 0, bw, bh)
+        dst.set(rightX, topY, rightX + dw, topY + dh)
+        canvas.drawBitmap(bmp, src, dst, paint)
+    }
+
+    /** Draws eyes + mouth on the forehead of an integrated [StageSpec] base. */
+    fun drawStageFace(
+        canvas: Canvas, resources: Resources,
+        stageRect: RectF, spec: StageSpec,
+        eyesPart: Part, mouth: DioramaScene.Mouth,
+    ) {
+        val bodyW = stageRect.width() * spec.bodyWidthFrac
+        val bcx = stageRect.left + stageRect.width() * spec.bodyCenterX
+        val eyeY = stageRect.top + stageRect.height() * spec.eyesCenterY
+        val mouthY = eyeY + bodyW * spec.mouthOffsetYOfBodyW
+        drawSplitEyes(canvas, resources, eyesPart, bcx, eyeY, bodyW)
+        val mouthW = bodyW * mouthWidthOfBody(mouth)
+        drawCentered(canvas, resources, mouthPart(mouth), bcx, mouthY, mouthW, mouthW)
     }
 }

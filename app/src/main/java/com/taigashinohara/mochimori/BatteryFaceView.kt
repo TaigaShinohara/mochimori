@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.hardware.Sensor
@@ -25,11 +26,11 @@ import androidx.core.graphics.ColorUtils
 import com.google.android.material.color.MaterialColors
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
-import kotlin.math.tan
 
 /**
  * The big central battery. Until v0.3.29 it was drawn in code
@@ -265,6 +266,7 @@ class BatteryFaceView @JvmOverloads constructor(
     var levelPercent: Int = 80
         set(value) {
             field = value.coerceIn(0, 100)
+            liquidSim.setFillLevel(field / 100f)
             updateDescription()
             invalidate()
         }
@@ -286,8 +288,19 @@ class BatteryFaceView @JvmOverloads constructor(
     var heatScene: HeatScene.Scene? = null
         set(value) {
             field = value
+            if (INTEGRATED_STAGE && lastW > 0 && lastH > 0) {
+                val spec = DioramaArt.stageSpec(currentDecision(currentKind()).ground)
+                if (spec != activeSpec) updateGeometry(lastW, lastH, spec)
+            }
             invalidate()
         }
+
+    private fun currentDecision(kind: FaceKind): DioramaScene.Decision = DioramaScene.of(
+        heatScene,
+        charging = kind == FaceKind.CHARGING,
+        saving = kind == FaceKind.SAVING,
+        unknown = kind == FaceKind.UNKNOWN,
+    )
 
     private enum class FaceKind { SAVING, HOT, CHARGING, UNKNOWN }
 
@@ -317,11 +330,11 @@ class BatteryFaceView @JvmOverloads constructor(
     private var vibrator: Vibrator? = null
     private var vibratorChecked = false
 
-    // ---- Tilt / sloshing state (v0.3.6) ----
-    // The accelerometer needs no permission (see class doc). Readings are
-    // low-pass filtered into a gravity estimate; the liquid surface angle
-    // chases the tilt target through a spring–damper so it lags, overshoots
-    // and settles. All angles in radians, clamped to ±0.6 (~35°).
+    // ---- Tilt / sloshing & shallow-water fluid engine ----
+    // The accelerometer needs no permission (SENSOR_DELAY_GAME is ~50 Hz,
+    // well below the 200 Hz HIGH_SAMPLING_RATE_SENSORS platform cap).
+    // Readings feed [LiquidPhysics] (shallow-water solver + wall-impact
+    // splash jets + airborne/wall-clinging droplets + advected bubbles).
     private var sensorManager: SensorManager? = null
     private var accelSensor: Sensor? = null
     private var sensorChecked = false
@@ -331,65 +344,33 @@ class BatteryFaceView @JvmOverloads constructor(
     private var gravZ = 0f
     private var tiltTarget = 0f
     private var sloshAngle = 0f
-    private var sloshVel = 0f
-    private var sloshEnergy = 0f // smoothed |motion| — drives extra wave height
     private var lastFrameNanos = 0L
 
-    // ---- Splash state (v0.3.8): energy from shakes / sharp tilts. ----
-    // linAccelMag is written by the sensor listener (main thread) and
-    // read by the animator callback (also main thread).
-    private var linAccelMag = 0f
-    private var splashEnergy = 0f // 0 calm … 1 full splash (state-scaled at draw time)
-    private var splashClock = 0f // seconds of animation time; drives particle timing
+    private var linAccelX = 0f
+    private var linAccelY = 0f
+    private var splashEnergy = 0f // 0 calm … 1 full splash
+    private var splashClock = 0f // seconds of animation time; drives diorama & blink
     private var splashHapticCoolNanos = 0L // refractory so splash pulses never machine-gun
 
-    // ---- Particle liquid state (v0.3.9) ----
-    // Surface chain: one particle per surface sample point. rippleY is
-    // the particle's offset from the analytic wave surface, rippleV its
-    // velocity; neighbours are spring-coupled so ripples travel.
-    private val rippleY = FloatArray(SURFACE_STEPS + 1)
-    private val rippleV = FloatArray(SURFACE_STEPS + 1)
-    private val rippleF = FloatArray(SURFACE_STEPS + 1) // scratch forces
-    private var particleSeed = 0 // deterministic pseudo-random counter
-
-    /** One droplet particle (pooled; never allocated per frame). */
-    private class Drop {
-        var active = false
-        var x = 0f; var y = 0f; var vx = 0f; var vy = 0f; var r = 1f
-    }
-    private val drops = Array(DROP_POOL) { Drop() }
-    private var dropSpawnAcc = 0f
-
-    /** One bubble particle (pooled): position kept as fractions of the
-     *  liquid column so it survives level/size changes gracefully. */
-    private class BubbleP {
-        var init = false
-        var xF = 0f; var yF = 0f; var r = 1f; var speed = 0f; var wob = 0f
-    }
-    private val bubblePs = Array(BUBBLE_POOL) { BubbleP() }
+    private val liquidSim = LiquidPhysics(SURFACE_STEPS).apply { reset(0.80f) }
     private val dropRect = RectF() // scratch for droplet drawing
 
     private val sensorListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
-            // Low-pass filter: keeps gravity, drops hand jitter. Kept tiny
-            // on purpose — filtering/reduction happens here, physics and
-            // drawing happen in the animator callback, never blocking this.
-            val a = 0.12f
+            // Low-pass filter: keeps gravity, drops hand jitter.
+            val a = 0.14f
             gravX += a * (event.values[0] - gravX)
             gravY += a * (event.values[1] - gravY)
             gravZ += a * (event.values[2] - gravZ)
-            // Linear acceleration (everything that is not gravity): a
-            // shake or a sharp tilt shows up here and feeds the splash.
-            val lx = event.values[0] - gravX
-            val ly = event.values[1] - gravY
-            val lz = event.values[2] - gravZ
-            linAccelMag = sqrt(lx * lx + ly * ly + lz * lz)
-            // In-plane magnitude factor: ~1 held upright, ~0 lying flat
-            // (screen up), where "tilt" has no meaning for the surface.
+            // Linear acceleration (shakes & sharp lateral flicks) drives
+            // inertial sloshing and wall-impact splashes in LiquidPhysics.
+            linAccelX = event.values[0] - gravX
+            linAccelY = event.values[1] - gravY
+            // In-plane magnitude factor: ~1 held upright, ~0 lying flat.
             val mag = sqrt(gravX * gravX + gravY * gravY) / 9.81f
             val factor = min(1f, mag)
             tiltTarget = (atan2(-gravX.toDouble(), gravY.toDouble()).toFloat() * factor)
-                .coerceIn(-0.6f, 0.6f)
+                .coerceIn(-0.95f, 0.95f)
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -412,11 +393,12 @@ class BatteryFaceView @JvmOverloads constructor(
         if (sensorRegistered || motionReduced()) return
         ensureSensor()
         val sm = sensorManager ?: return
-        val sensor = accelSensor ?: return // no accelerometer: time-based waves only
+        val sensor = accelSensor ?: return // no accelerometer: ambient waves only
         try {
-            // SENSOR_DELAY_UI (~15 Hz) is far below the 200 Hz platform cap,
-            // so no HIGH_SAMPLING_RATE_SENSORS permission is involved.
-            if (sm.registerListener(sensorListener, sensor, SensorManager.SENSOR_DELAY_UI)) {
+            // SENSOR_DELAY_GAME (~50 Hz) is well below the 200 Hz platform cap,
+            // so no HIGH_SAMPLING_RATE_SENSORS permission is involved, while
+            // capturing quick shakes and wall slams cleanly.
+            if (sm.registerListener(sensorListener, sensor, SensorManager.SENSOR_DELAY_GAME)) {
                 sensorRegistered = true
             }
         } catch (e: Exception) {
@@ -434,13 +416,12 @@ class BatteryFaceView @JvmOverloads constructor(
         }
         // Come to rest level instead of freezing mid-tilt.
         tiltTarget = 0f
+        linAccelX = 0f
+        linAccelY = 0f
     }
 
     /**
-     * Physics step, driven by the animator's real frame interval
-     * (vsync) and integrated in ≤8ms sub-steps (v0.3.8): the tilt
-     * spring and the splash energy stay smooth and stable even when
-     * frames arrive unevenly.
+     * Advances [LiquidPhysics] using the real animator frame interval.
      */
     private fun stepSlosh(nowNanos: Long) {
         if (lastFrameNanos == 0L) {
@@ -450,188 +431,10 @@ class BatteryFaceView @JvmOverloads constructor(
         val dt = ((nowNanos - lastFrameNanos) / 1e9f).coerceIn(0.001f, 0.05f)
         lastFrameNanos = nowNanos
         splashClock += dt
-        val sub = maxOf(1, (dt / 0.008f).toInt() + 1)
-        val h = dt / sub
-        repeat(sub) {
-            // Under-damped spring (ζ ≈ 0.5): the surface lags the tilt,
-            // swings past level once or twice, then settles — like real
-            // liquid.
-            val accel = SLOSH_STIFFNESS * (tiltTarget - sloshAngle) - SLOSH_DAMPING * sloshVel
-            sloshVel += accel * h
-            sloshAngle += sloshVel * h
-            // Splash excitation: linear acceleration beyond a quiet-hand
-            // threshold, plus the surface spring's own speed (a hard
-            // swing splashes even without a shake).
-            val excite = (
-                ((linAccelMag - 2.2f) / 8.5f).coerceIn(0f, 1f) +
-                    (abs(sloshVel) / 2.4f).coerceIn(0f, 1f) * 0.7f
-                ).coerceIn(0f, 1f)
-            splashEnergy = if (excite > splashEnergy) {
-                // Fast attack: a shake is felt in the liquid at once.
-                splashEnergy + (excite - splashEnergy) * min(1f, h * 14f)
-            } else {
-                // Slow decay (~2 s): the bashing settles gradually.
-                splashEnergy + (excite - splashEnergy) * min(1f, h * 1.4f)
-            }
-        }
-        val e = abs(sloshVel) * 1.1f + abs(tiltTarget - sloshAngle) * 1.4f
-        sloshEnergy += (e - sloshEnergy) * min(1f, dt * 3.5f)
-        stepParticles(dt)
-        maybeSplashHaptic(nowNanos)
-    }
 
-    // ---------------- Particle liquid (v0.3.9) ----------------
-
-    /**
-     * The wave parameters for the current frame, shared by the drawing
-     * code and the particle physics (so droplets land on the same
-     * surface that is drawn). Layout: [baseY, tanA, amp1, amp2, amp3,
-     * ampR, kf1, kf2, wavePhase].
-     */
-    private fun computeWave(kind: FaceKind): FloatArray {
-        // Wave amplitudes scale with the face (v0.3.19): at a small
-        // slot the full-size waves would fill the whole liquid column.
-        val ampScale = maxOf(sizeScale, 0.65f)
-        val baseAmp = when (kind) {
-            FaceKind.HOT -> dp(2.1f)
-            FaceKind.CHARGING -> dp(1.5f)
-            FaceKind.SAVING -> dp(1.1f)
-            FaceKind.UNKNOWN -> 0f
-        } * ampScale
-        val boost = min(dp(3.5f) * sloshEnergy, dp(5.5f)) * ampScale
-        val splash = splashLevel()
-        val amp1 = baseAmp + boost + dp(5.0f) * splash * ampScale
-        val waveSpeed = when (kind) {
-            FaceKind.HOT -> 2.0f
-            FaceKind.CHARGING -> 1.2f
-            else -> 0.6f
-        }
-        val innerW = innerRect.width()
-        return floatArrayOf(
-            innerRect.bottom - innerRect.height() * (levelPercent / 100f),
-            tan(sloshAngle.toDouble()).toFloat(),
-            amp1,
-            amp1 * 0.45f,
-            (dp(0.55f) + dp(0.8f) * splash) * ampScale,
-            dp(3.2f) * splash * ampScale,
-            (2 * Math.PI / (innerW * 0.9f)).toFloat(),
-            (2 * Math.PI / (innerW * 0.45f)).toFloat(),
-            phase * waveSpeed,
-        )
-    }
-
-    /** Analytic surface height at x, WITHOUT the particle ripple. */
-    private fun analyticY(x: Float, wp: FloatArray): Float =
-        surfaceY(x, wp[0], wp[1], wp[2], wp[3], wp[6], wp[7], wp[8], wp[4], wp[5])
-
-    /** Particle ripple offset interpolated at x. */
-    private fun rippleAt(x: Float): Float {
-        val w = innerRect.width()
-        if (w <= 0f) return 0f
-        val f = ((x - innerRect.left) / w).coerceIn(0f, 1f) * SURFACE_STEPS
-        val i = f.toInt().coerceAtMost(SURFACE_STEPS - 1)
-        val t = f - i
-        return rippleY[i] * (1f - t) + rippleY[i + 1] * t
-    }
-
-    /** Full surface height at x: analytic wave + particle ripple. */
-    private fun surfaceAt(x: Float, wp: FloatArray): Float = analyticY(x, wp) + rippleAt(x)
-
-    /** Deterministic pseudo-random in [0,1) from the particle clock. */
-    private fun prand(salt: Float): Float {
-        particleSeed++
-        return frac(particleSeed * 0.6180339f + salt * 7.13f)
-    }
-
-    /** Kick the surface chain around x with a velocity impulse. */
-    private fun rippleImpulse(x: Float, impulse: Float) {
-        val w = innerRect.width()
-        if (w <= 0f) return
-        val f = ((x - innerRect.left) / w).coerceIn(0f, 1f) * SURFACE_STEPS
-        val c = f.toInt()
-        for (k in -2..2) {
-            val i = c + k
-            if (i in 0..SURFACE_STEPS) {
-                rippleV[i] += impulse * (1f - abs(k) / 3f)
-            }
-        }
-    }
-
-    /**
-     * Particle physics, stepped once per animator frame with the real
-     * frame interval (the surface chain sub-steps for stability):
-     *  - surface chain: each particle is pulled to the analytic wave
-     *    (spring), damped, and coupled to its neighbours, so ripples
-     *    travel and interfere; splash energy injects random impulses.
-     *  - droplets: spawned by the splash, flown under gravity, bounced
-     *    off the inner walls, and landed back into the surface — the
-     *    landing momentum becomes a ripple, sometimes with a small
-     *    secondary droplet.
-     *  - bubbles: rise at their own speeds and respawn at the bottom.
-     */
-    private fun stepParticles(dt: Float) {
-        if (innerRect.width() <= 0f) return
         val kind = targetKind
-        val splash = splashLevel()
-
-        // --- Surface chain ---
-        if (splash > 0.15f) {
-            val kicks = (splash * 3f).toInt() + if (prand(0.31f) < splash) 1 else 0
-            repeat(kicks) {
-                val i = (prand(0.77f) * SURFACE_STEPS).toInt().coerceIn(0, SURFACE_STEPS)
-                rippleV[i] += (prand(0.53f) - 0.5f) * dp(300f) * splash
-            }
-        }
-        val sub = 2
-        val h = dt / sub
-        repeat(sub) {
-            for (i in 0..SURFACE_STEPS) {
-                val l = rippleY[maxOf(0, i - 1)]
-                val r = rippleY[minOf(SURFACE_STEPS, i + 1)]
-                rippleF[i] = -RIPPLE_K * rippleY[i] - RIPPLE_C * rippleV[i] +
-                    RIPPLE_COUPLE * (l + r - 2f * rippleY[i])
-            }
-            val maxRipple = dp(9f) * maxOf(sizeScale, 0.6f)
-            for (i in 0..SURFACE_STEPS) {
-                rippleV[i] += rippleF[i] * h
-                rippleY[i] = (rippleY[i] + rippleV[i] * h).coerceIn(-maxRipple, maxRipple)
-            }
-        }
-
-        // --- Droplets ---
-        val wp = computeWave(kind)
-        dropSpawnAcc += splash * dt * 20f
-        while (dropSpawnAcc >= 1f) {
-            dropSpawnAcc -= 1f
-            spawnDrop(wp, splash)
-        }
-        val grav = dp(1500f)
-        val left = innerRect.left; val right = innerRect.right
-        val bottom = innerRect.bottom
-        for (d in drops) {
-            if (!d.active) continue
-            d.vy += grav * dt
-            d.x += d.vx * dt
-            d.y += d.vy * dt
-            if (d.x < left + d.r) { d.x = left + d.r; d.vx = -d.vx * 0.45f }
-            if (d.x > right - d.r) { d.x = right - d.r; d.vx = -d.vx * 0.45f }
-            if (d.y > bottom - d.r) { d.active = false; continue }
-            if (d.vy > 0f && d.y >= surfaceAt(d.x, wp) - d.r * 0.3f) {
-                // Landing: momentum goes back into the surface chain.
-                rippleImpulse(d.x, d.vy * 0.38f)
-                d.active = false
-                if (prand(0.91f) < 0.3f) {
-                    spawnDropAt(d.x, surfaceAt(d.x, wp), -d.vy * 0.35f)
-                }
-            }
-        }
-
-        // --- Bubbles ---
-        // v0.3.27: while a heat verdict exists (and the face is
-        // not charging), the count and the pace follow the heat —
-        // more numerous and faster the hotter it is.
         val heatActivity = heatScene?.takeIf { it.heat != null }?.particleActivity
-        val (count, rate) = when {
+        val (bubbleCount, bubbleRate) = when {
             kind == FaceKind.UNKNOWN -> 0 to 0f
             kind != FaceKind.CHARGING && heatActivity != null ->
                 heatBubbleCount(heatActivity) to (0.35f + 1.05f * heatActivity)
@@ -639,55 +442,39 @@ class BatteryFaceView @JvmOverloads constructor(
             kind == FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 0.9f
             else -> BUBBLE_COUNTS[2] to 0.35f
         }
-        for (i in 0 until count) {
-            val b = bubblePs[i]
-            initBubble(b, i)
-            b.yF += b.speed * rate * dt * 2.2f
-            if (b.yF >= 1f) {
-                b.yF = 0f
-                b.xF = frac(b.xF + 0.618f)
-            }
+        val aspect = if (innerRect.width() > 0f) {
+            (innerRect.height() / innerRect.width()).coerceIn(0.8f, 3.0f)
+        } else {
+            1.72f
         }
+        liquidSim.step(
+            dtSeconds = dt,
+            tiltRad = tiltTarget,
+            lateralAccelNorm = linAccelX,
+            verticalAccelNorm = linAccelY,
+            liveliness = splashScale(),
+            bubbleCount = bubbleCount,
+            bubbleRate = bubbleRate,
+            aspect = aspect,
+        )
+        // Decay linear impulse between sensor callbacks
+        val decay = (1f - min(1f, dt * 8f))
+        linAccelX *= decay
+        linAccelY *= decay
+        sloshAngle = liquidSim.effectiveTilt
+        splashEnergy = liquidSim.splashEnergy
+        maybeSplashHaptic(nowNanos)
     }
 
-    private fun initBubble(b: BubbleP, i: Int) {
-        if (b.init) return
-        b.init = true
-        val seed = BUBBLE_SEEDS[i % BUBBLE_SEEDS.size]
-        b.xF = frac(seed * 7.31f)
-        b.yF = frac(seed * 3.97f)
-        b.r = dp(0.8f) + dp(1.6f) * frac(seed * 3.7f)
-        b.speed = 0.06f + 0.08f * frac(seed * 5.3f)
-        b.wob = seed * 17f
-    }
-
-    private fun spawnDrop(wp: FloatArray, splash: Float) {
-        val d = drops.firstOrNull { !it.active } ?: return
-        val x = innerRect.left + innerRect.width() * (0.08f + 0.84f * prand(0.17f))
-        val leapH = dp(5f + 13f * splash * (0.4f + 0.6f * prand(0.43f)))
-        val vy = -sqrt(2f * dp(1500f) * leapH)
-        spawnDropAt(x, surfaceAt(x, wp), vy, d)
-    }
-
-    private fun spawnDropAt(x: Float, y: Float, vy: Float, reuse: Drop? = null) {
-        val d = reuse ?: drops.firstOrNull { !it.active } ?: return
-        d.active = true
-        d.x = x
-        d.y = y - dp(1f)
-        d.vx = sloshVel * dp(46f) * (prand(0.67f) - 0.5f) * 2f
-        d.vy = vy
-        d.r = dp(0.8f) + dp(1.3f) * prand(0.29f)
-    }
-
-    /** Splash strength for the current face: the cool face stays calm. */
+    /** Splash strength for the current face: the cool face stays calm, hot splashes freely. */
     private fun splashScale(): Float = when (targetKind) {
-        FaceKind.SAVING -> 0.45f
-        FaceKind.CHARGING -> 0.7f
+        FaceKind.SAVING -> 0.55f
+        FaceKind.CHARGING -> 0.75f
         FaceKind.HOT -> 1.0f
         FaceKind.UNKNOWN -> 0f
     }
 
-    private fun splashLevel(): Float = splashEnergy * splashScale()
+    private fun splashLevel(): Float = splashEnergy
 
     private val density = resources.displayMetrics.density
     private fun dp(v: Float): Float = v * density
@@ -703,24 +490,44 @@ class BatteryFaceView @JvmOverloads constructor(
         context, com.google.android.material.R.attr.colorOnSurfaceVariant, Color.rgb(0x90, 0x90, 0x90),
     )
 
-    /** One state's palette: the liquid's accent and its shader. */
+    /** One state's palette: liquid depth gradient, 3D meniscus tints, and caustic glow. */
     private inner class Palette(var accent: Int) {
         var liquid: Shader? = null
-        fun build(innerTop: Float, innerBottom: Float) {
-            // Liquid (v0.3.6): anchored to the inner height, so whatever
-            // part of it is visible reads light near the surface and deep
-            // at the bottom — depth, not a flat fill. This is the one
-            // gradient that survives the v0.3.21 flattening: it is how
-            // the level reads, not decoration.
+        var caustic: Shader? = null
+        var backLiquidColor: Int = Color.TRANSPARENT
+        var meniscusFillColor: Int = Color.TRANSPARENT
+
+        fun build(inner: RectF) {
+            if (inner.width() <= 0f || inner.height() <= 0f) return
+            // Warm liquids blend toward warm sunlight (#FFF2D8) instead of
+            // pure white so deep reds stay amber-translucent rather than pink.
+            val isWarm = Color.red(accent) > Color.blue(accent) + 25
+            val lightTint = if (isWarm) Color.rgb(0xFF, 0xF2, 0xD8) else Color.rgb(0xE8, 0xF8, 0xFF)
+            val topCol = ColorUtils.blendARGB(accent, lightTint, 0.42f)
+            val upperMid = ColorUtils.blendARGB(accent, lightTint, 0.14f)
+            val deepCol = ColorUtils.blendARGB(accent, Color.BLACK, 0.34f)
             liquid = LinearGradient(
-                0f, innerTop, 0f, innerBottom,
+                0f, inner.top, 0f, inner.bottom,
+                intArrayOf(topCol, upperMid, accent, deepCol),
+                floatArrayOf(0f, 0.32f, 0.72f, 1f), Shader.TileMode.CLAMP,
+            )
+            backLiquidColor = ColorUtils.setAlphaComponent(
+                ColorUtils.blendARGB(accent, Color.BLACK, 0.14f), 145,
+            )
+            meniscusFillColor = ColorUtils.setAlphaComponent(
+                ColorUtils.blendARGB(accent, lightTint, 0.56f), 110,
+            )
+            val cx = inner.left + inner.width() * 0.48f
+            val cy = inner.top + inner.height() * 0.78f
+            val rad = maxOf(inner.width() * 0.56f, 1f)
+            caustic = RadialGradient(
+                cx, cy, rad,
                 intArrayOf(
-                    ColorUtils.blendARGB(accent, Color.WHITE, 0.50f),
-                    ColorUtils.blendARGB(accent, Color.WHITE, 0.16f),
-                    accent,
-                    ColorUtils.blendARGB(accent, Color.BLACK, 0.20f),
+                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, lightTint, 0.72f), 85),
+                    ColorUtils.setAlphaComponent(ColorUtils.blendARGB(accent, lightTint, 0.40f), 32),
+                    Color.TRANSPARENT,
                 ),
-                floatArrayOf(0f, 0.35f, 0.72f, 1f), Shader.TileMode.CLAMP,
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP,
             )
         }
     }
@@ -748,7 +555,7 @@ class BatteryFaceView @JvmOverloads constructor(
                     heatAccentCache = accent
                     heatPalette.accent = accent
                     if (innerRect.width() > 0f) {
-                        heatPalette.build(innerRect.top, innerRect.bottom)
+                        heatPalette.build(innerRect)
                     }
                 }
                 return heatPalette
@@ -761,22 +568,81 @@ class BatteryFaceView @JvmOverloads constructor(
         }
     }
 
+    // ---- Shared optical shaders for the glass tube & cylinder shading ----
+    private var cavityCylShader: Shader? = null
+    private var liquidCylShader: Shader? = null
+    private var glassLeftShader: Shader? = null
+    private var glassRightShader: Shader? = null
+
+    private fun buildGlassShaders(inner: RectF) {
+        if (inner.width() <= 0f || inner.height() <= 0f) return
+        cavityCylShader = LinearGradient(
+            inner.left, 0f, inner.right, 0f,
+            intArrayOf(
+                Color.argb(38, 10, 24, 38),
+                Color.argb(8, 10, 24, 38),
+                Color.TRANSPARENT,
+                Color.argb(10, 10, 24, 38),
+                Color.argb(44, 10, 24, 38),
+            ),
+            floatArrayOf(0f, 0.14f, 0.50f, 0.86f, 1f), Shader.TileMode.CLAMP,
+        )
+        // Cylinder curvature shadow + thin bright glass-wall refraction rims
+        liquidCylShader = LinearGradient(
+            inner.left, 0f, inner.right, 0f,
+            intArrayOf(
+                Color.argb(72, 0, 10, 20),
+                Color.argb(62, 255, 255, 255),
+                Color.TRANSPARENT,
+                Color.TRANSPARENT,
+                Color.argb(44, 255, 255, 255),
+                Color.argb(82, 0, 10, 20),
+            ),
+            floatArrayOf(0f, 0.08f, 0.20f, 0.82f, 0.92f, 1f), Shader.TileMode.CLAMP,
+        )
+        glassLeftShader = LinearGradient(
+            0f, inner.top, 0f, inner.bottom,
+            intArrayOf(
+                Color.TRANSPARENT,
+                Color.argb(86, 255, 255, 255),
+                Color.argb(54, 255, 255, 255),
+                Color.TRANSPARENT,
+            ),
+            floatArrayOf(0.05f, 0.18f, 0.80f, 0.94f), Shader.TileMode.CLAMP,
+        )
+        glassRightShader = LinearGradient(
+            0f, inner.top, 0f, inner.bottom,
+            intArrayOf(
+                Color.TRANSPARENT,
+                Color.argb(48, 255, 255, 255),
+                Color.argb(30, 255, 255, 255),
+                Color.TRANSPARENT,
+            ),
+            floatArrayOf(0.08f, 0.24f, 0.78f, 0.92f), Shader.TileMode.CLAMP,
+        )
+    }
+
     // ---- Paints (reused). Only the liquid still paints with
     // these: since v0.4.0 everything else is a diorama image
-    // (DioramaArt has its own bitmap paint). The shell / cavity /
-    // outline / cap / bolt / face / flame paints that stood here
-    // were retired with their drawings.
+    // (DioramaArt has its own bitmap paint).
     private val liquidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val liquidEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val bubblePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bubbleRimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
     // ---- Paths (reused; rewound each use, never allocated in onDraw).
     private val wavePath = Path()
+    private val backWavePath = Path()
+    private val ribbonPath = Path()
     private val edgePath = Path()
+    private val underEdgePath = Path()
+    private val backEdgePath = Path()
+    private val glintPath = Path()
     private val clipPath = Path()
     private val groundRect = RectF() // scratch rect (the ground band)
+    private val glassRect = RectF() // scratch rect (glass highlight bar)
 
     // ---- Geometry cached in onSizeChanged.
     /** Slot height relative to the full-size 320dp slot (v0.3.19):
@@ -784,48 +650,51 @@ class BatteryFaceView @JvmOverloads constructor(
      *  sizes scale by it so the face keeps its proportions. */
     private var sizeScale = 1f
     private val bodyRect = RectF()
+    private val stageRect = RectF()
     private val innerRect = RectF()
     private val layerRect = RectF()
+    private var activeSpec: DioramaArt.StageSpec = DioramaArt.STAGE_GRASS
+    private var lastW = 0
+    private var lastH = 0
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        // Upright battery (v0.3.6, user's instruction): width : height
-        // ≈ 1 : 1.55, cap on TOP centre like a standing dry cell. Headroom
-        // above the body is reserved for the cap (it held the flames
-        // until v0.3.22), with the cap in
-        // the middle of it; an empty zone sits below (it held the ground
-        // shadow until v0.3.21 removed it; the zone stays in the
-        // geometry). The rect itself
-        // comes from the shared bodyRectDp() (v0.3.19): the headroom and
-        // shadow zones scale with the slot height, so a flexed-down slot
-        // shrinks the whole composition proportionally instead of the
-        // zones eating the body.
-        val bodyDp = bodyRectDp(w / density, h / density)
+        lastW = w
+        lastH = h
+        val spec = DioramaArt.stageSpec(currentDecision(currentKind()).ground)
+        updateGeometry(w, h, spec)
+    }
+
+    private fun updateGeometry(w: Int, h: Int, spec: DioramaArt.StageSpec) {
         sizeScale = (h / density / 320f).coerceIn(0.45f, 1f)
-        val left = bodyDp.left * density
-        val top = bodyDp.top * density
-        val bodyW = bodyDp.width() * density
-        val bodyH = bodyDp.height() * density
-        bodyRect.set(left, top, left + bodyW, top + bodyH)
-        // v0.4.0: bodyRect is now the body PHOTOGRAPH's rect, and
-        // the "interior" the liquid lives in is the photograph's
-        // real window hole — its measured fractions inside the
-        // body image (DioramaArt.WIN_*), expanded by ~2% of the
-        // body width on every side so the liquid tucks under the
-        // resin frame and the hole never shows a backdrop sliver.
-        // Everything the liquid physics ever did with innerRect
-        // (waves, particles, bubbles) now happens inside the
-        // window, unchanged.
-        val pad = bodyW * 0.018f
-        innerRect.set(
-            left + bodyW * DioramaArt.WIN_L - pad, top + bodyH * DioramaArt.WIN_T - pad,
-            left + bodyW * DioramaArt.WIN_R + pad, top + bodyH * DioramaArt.WIN_B + pad,
-        )
         layerRect.set(0f, 0f, w.toFloat(), h.toFloat())
-        coolPalette.build(innerRect.top, innerRect.bottom)
-        hotPalette.build(innerRect.top, innerRect.bottom)
-        neutralPalette.build(innerRect.top, innerRect.bottom)
-        heatPalette.build(innerRect.top, innerRect.bottom)
+        if (INTEGRATED_STAGE) {
+            activeSpec = spec
+            val stageDp = stageRectDp(w / density, h / density, spec.aspectRatio)
+            stageRect.set(
+                stageDp.left * density, stageDp.top * density,
+                stageDp.right * density, stageDp.bottom * density,
+            )
+            bodyRect.set(stageRect)
+            DioramaArt.computeWindowRect(stageRect, spec, innerRect)
+        } else {
+            val bodyDp = bodyRectDp(w / density, h / density)
+            val left = bodyDp.left * density
+            val top = bodyDp.top * density
+            val bodyW = bodyDp.width() * density
+            val bodyH = bodyDp.height() * density
+            bodyRect.set(left, top, left + bodyW, top + bodyH)
+            val pad = bodyW * 0.018f
+            innerRect.set(
+                left + bodyW * DioramaArt.WIN_L - pad, top + bodyH * DioramaArt.WIN_T - pad,
+                left + bodyW * DioramaArt.WIN_R + pad, top + bodyH * DioramaArt.WIN_B + pad,
+            )
+        }
+        buildGlassShaders(innerRect)
+        coolPalette.build(innerRect)
+        hotPalette.build(innerRect)
+        neutralPalette.build(innerRect)
+        heatPalette.build(innerRect)
     }
 
     /** Spoken description of the face itself (R9). */
@@ -1012,9 +881,9 @@ class BatteryFaceView @JvmOverloads constructor(
      * without amplitude control get a short fixed pulse instead.
      */
     private fun maybeSplashHaptic(nowNanos: Long) {
-        val level = splashLevel()
-        if (level < 0.5f) return
-        if (nowNanos - splashHapticCoolNanos < 450_000_000L) return
+        val level = maxOf(splashLevel(), liquidSim.lastWallImpact.coerceAtMost(1f))
+        if (level < 0.42f) return
+        if (nowNanos - splashHapticCoolNanos < 380_000_000L) return
         val vib = hapticsAllowed() ?: return
         splashHapticCoolNanos = nowNanos
         try {
@@ -1124,6 +993,21 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun drawFace(canvas: Canvas, kind: FaceKind) {
         val palette = paletteFor(kind)
+        if (INTEGRATED_STAGE) {
+            val dio = currentDecision(kind)
+            val spec = DioramaArt.stageSpec(dio.ground)
+            if (spec != activeSpec && lastW > 0 && lastH > 0) {
+                updateGeometry(lastW, lastH, spec)
+            }
+            drawLiquid(canvas, palette, kind)
+            DioramaArt.drawInto(canvas, resources, spec.bodyPart, stageRect)
+            if (kind == FaceKind.CHARGING) {
+                drawLightning(canvas)
+            }
+            val eyes = if (blinkScale() < 0.55f) DioramaArt.Part.EYES_CLOSED else DioramaArt.Part.EYES_OPEN
+            DioramaArt.drawStageFace(canvas, resources, stageRect, spec, eyes, dio.mouth)
+            return
+        }
         if (MINIMAL_SCENE) {
             // v0.4.1 minimal scene: the liquid and the body
             // photograph, nothing else (see the class doc). The
@@ -1134,12 +1018,7 @@ class BatteryFaceView @JvmOverloads constructor(
             DioramaArt.drawInto(canvas, resources, DioramaArt.Part.BODY, bodyRect)
             return
         }
-        val dio = DioramaScene.of(
-            heatScene,
-            charging = kind == FaceKind.CHARGING,
-            saving = kind == FaceKind.SAVING,
-            unknown = kind == FaceKind.UNKNOWN,
-        )
+        val dio = currentDecision(kind)
 
         // The diorama composition (v0.4.0), back to front, in the
         // approved design's order: backdrop board → ground →
@@ -1200,7 +1079,7 @@ class BatteryFaceView @JvmOverloads constructor(
     /** The charging marker: the lightning part over the window,
      *  breathing very slightly on the animation clock. */
     private fun drawLightning(canvas: Canvas) {
-        val h = bodyRect.height() * 0.34f
+        val h = if (INTEGRATED_STAGE) innerRect.height() * 0.58f else bodyRect.height() * 0.34f
         val pulse = 1f + 0.03f * sin(splashClock * 2.2f).toFloat()
         DioramaArt.drawCentered(
             canvas, resources, DioramaArt.Part.LIGHTNING,
@@ -1357,9 +1236,9 @@ class BatteryFaceView @JvmOverloads constructor(
     // all on the existing animation clock (splashClock) — a
     // still face (reduced motion) gets the same picture, frozen.
 
-    /** Bubble count for a heat activity: 3 (calm) … 8 (hottest). */
+    /** Bubble count for a heat activity: 5 (calm) … 22 (hottest). */
     private fun heatBubbleCount(activity: Float): Int =
-        (3f + 5f * activity).roundToInt().coerceIn(0, BUBBLE_POOL)
+        (5f + 17f * activity).roundToInt().coerceIn(0, BUBBLE_POOL)
 
     /**
      * The flames (v0.4.0): one diorama flame image per stage —
@@ -1432,182 +1311,341 @@ class BatteryFaceView @JvmOverloads constructor(
         HeatScene.CoolObject.SNOWMAN -> floatArrayOf(-0.18f, 0.94f)
     }
 
-    /**
-     * Liquid surface height (px) at x: tilt plane + two travelling
-     * waves + a fine third wave (smoothness, v0.3.8) + a counter-wave
-     * that only exists while splashing — the reflection bouncing back
-     * off the far inner wall, phase-reversed against the main wave.
-     */
-    private fun surfaceY(
-        x: Float, baseY: Float, tanA: Float,
-        amp1: Float, amp2: Float, kf1: Float, kf2: Float, wavePhase: Float,
-        amp3: Float, ampR: Float,
-    ): Float {
-        val dx = x - innerRect.left
-        return baseY - (x - bodyRect.centerX()) * tanA +
-            amp1 * sin((dx * kf1 - wavePhase).toDouble()).toFloat() +
-            amp2 * sin((dx * kf2 + wavePhase * 0.63f + 1.7f).toDouble()).toFloat() +
-            amp3 * sin((dx * kf1 * 2.63f - wavePhase * 1.71f + 0.6f).toDouble()).toFloat() +
-            ampR * sin((dx * kf1 + wavePhase * 1.31f + 2.4f).toDouble()).toFloat()
-    }
-
     // Surface sample buffers (fields, reused every frame — no onDraw
     // allocation). SURFACE_STEPS + 1 points across the inner width.
     private val surfX = FloatArray(SURFACE_STEPS + 1)
     private val surfY = FloatArray(SURFACE_STEPS + 1)
+    private val backSurfY = FloatArray(SURFACE_STEPS + 1)
 
-    /** Appends the smoothed surface curve (midpoint quadratics) to a path. */
-    private fun traceSurface(path: Path) {
-        var px = surfX[0]; var py = surfY[0]
+    /** Appends a smoothed surface curve (midpoint quadratics) to a path. */
+    private fun traceCurve(path: Path, ys: FloatArray) {
+        var px = surfX[0]; var py = ys[0]
         for (i in 1..SURFACE_STEPS) {
-            val mx = (px + surfX[i]) / 2f; val my = (py + surfY[i]) / 2f
+            val mx = (px + surfX[i]) / 2f; val my = (py + ys[i]) / 2f
             path.quadTo(px, py, mx, my)
-            px = surfX[i]; py = surfY[i]
+            px = surfX[i]; py = ys[i]
+        }
+        path.lineTo(px, py)
+    }
+
+    /** Appends a smoothed surface curve in reverse (right → left) to close a ribbon. */
+    private fun traceCurveReverse(path: Path, ys: FloatArray) {
+        var px = surfX[SURFACE_STEPS]; var py = ys[SURFACE_STEPS]
+        for (i in SURFACE_STEPS - 1 downTo 0) {
+            val mx = (px + surfX[i]) / 2f; val my = (py + ys[i]) / 2f
+            path.quadTo(px, py, mx, my)
+            px = surfX[i]; py = ys[i]
         }
         path.lineTo(px, py)
     }
 
     /**
-     * Droplet particles (v0.3.9, replacing the v0.3.8 formula-timed
-     * droplets): each active particle from the pool is drawn at its
-     * simulated position, stretched vertically by its speed like a
-     * real droplet in flight. Drawn inside the liquid's clip, so a
-     * droplet can never leave the shell. When the splash energy is
-     * gone no droplets are active and nothing is drawn; when motion
-     * is reduced the physics clock stops and the pool stays empty.
+     * Droplet particles from [LiquidPhysics]:
+     *  - Airborne splashes stretch along their real 2D velocity vector and
+     *    carry a specular glint dot.
+     *  - Wall-clinging glass droplets elongate vertically as they slide
+     *    slowly back down into the liquid.
      */
     private fun drawDropParticles(canvas: Canvas, palette: Palette) {
-        bubblePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.40f)
-        for (d in drops) {
+        val iw = innerRect.width()
+        val ih = innerRect.height()
+        if (iw <= 0f || ih <= 0f) return
+        val bodyCol = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.30f)
+        val rimCol = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.80f)
+        bubbleRimPaint.strokeWidth = maxOf(dp(0.55f), dp(0.75f) * sizeScale)
+        for (d in liquidSim.drops) {
             if (!d.active) continue
-            val stretch = 1f + min(abs(d.vy) / dp(900f), 0.55f)
-            val wHalf = d.r / sqrt(stretch)
-            val hHalf = d.r * sqrt(stretch)
-            dropRect.set(d.x - wHalf, d.y - hHalf, d.x + wHalf, d.y + hHalf)
-            bubblePaint.alpha = 205
-            canvas.drawOval(dropRect, bubblePaint)
+            val px = innerRect.left + d.x * iw
+            val py = innerRect.bottom - d.y * ih
+            val rad = (d.r * iw).coerceIn(dp(0.9f), dp(4.8f))
+            if (d.clinging) {
+                // Elongated teardrop clinging to the glass wall
+                val wHalf = rad * 0.78f
+                val hHalf = rad * 1.45f
+                dropRect.set(px - wHalf, py - hHalf, px + wHalf, py + hHalf)
+                bubblePaint.color = bodyCol
+                bubblePaint.alpha = 195
+                canvas.drawOval(dropRect, bubblePaint)
+                bubbleRimPaint.color = rimCol
+                bubbleRimPaint.alpha = 150
+                canvas.drawOval(dropRect, bubbleRimPaint)
+                bubblePaint.color = Color.WHITE
+                bubblePaint.alpha = 220
+                canvas.drawCircle(px - wHalf * 0.25f, py - hHalf * 0.32f, maxOf(dp(0.5f), rad * 0.28f), bubblePaint)
+            } else {
+                val speed = sqrt(d.vx * d.vx + d.vy * d.vy)
+                val stretch = 1f + min(speed * 0.45f, 0.75f)
+                val wHalf = rad / sqrt(stretch)
+                val hHalf = rad * sqrt(stretch)
+                val angleDeg = if (speed > 0.08f) {
+                    Math.toDegrees(atan2(d.vx.toDouble(), d.vy.toDouble())).toFloat()
+                } else {
+                    0f
+                }
+                canvas.save()
+                canvas.translate(px, py)
+                canvas.rotate(angleDeg)
+                dropRect.set(-wHalf, -hHalf, wHalf, hHalf)
+                bubblePaint.color = bodyCol
+                bubblePaint.alpha = 225
+                canvas.drawOval(dropRect, bubblePaint)
+                bubblePaint.color = Color.WHITE
+                bubblePaint.alpha = 230
+                canvas.drawCircle(-wHalf * 0.26f, -hHalf * 0.26f, maxOf(dp(0.55f), rad * 0.30f), bubblePaint)
+                canvas.restore()
+            }
         }
         bubblePaint.alpha = 255
+        bubbleRimPaint.alpha = 255
     }
 
     /**
-     * The liquid (v0.4.0): the same particle liquid as ever —
-     * surface chain, droplets, bubbles, tilt, splash — but its
-     * vessel is now the body photograph's real window hole:
-     * innerRect IS the window (see onSizeChanged), and the clip's
-     * corner radius is the hole's measured one. The body image is
-     * drawn over the liquid right after this (see drawFace), so
-     * what reads is a liquid sealed inside a miniature battery,
-     * not a drawing of one. The drawn shell, cavity, rim band,
-     * cap and outline this function used to paint are retired —
-     * they are part of the photograph now.
+     * Realistic glass-enclosed shallow-water liquid driven by [LiquidPhysics]:
+     *  1. Subtle cylindrical glass cavity shading (visible above liquid too)
+     *  2. Lagged back surface (2.5D depth)
+     *  3. Front shallow-water body with wall-impact splash crest runup:
+     *     vertical depth gradient + cylindrical wall shading & rims + caustic glow
+     *  4. 3D meniscus top ribbon + underside refraction shadow + bright edge + crest glint
+     *  5. Velocity-stretched splash droplets, wall-clinging glass drops, & 3D bubbles
+     *  6. Front glass tube vertical highlights shifting subtly with tilt
      */
     private fun drawLiquid(canvas: Canvas, palette: Palette, kind: FaceKind) {
-        // v0.4.2: the factor is the new body window's measured
-        // corner radius (148px of its 531px width ≈ 0.279) plus
-        // the tuck-under pad, over the expanded inner width —
-        // (0.279 × WIN_W + 0.018) / (WIN_W + 0.036) ≈ 0.291, so
-        // the clip's arc runs concentric with the hole's arc and
-        // a near-full liquid leaves no background slivers in the
-        // window's corners. (v0.4.1's body measured 0.227 and
-        // v0.4.0's 0.26 the same way.)
-        val innerRadius = innerRect.width() * 0.291f
+        if (innerRect.width() <= 0f || innerRect.height() <= 0f) return
+        val innerRadius = innerRect.width() * (if (INTEGRATED_STAGE) activeSpec.winRadiusRatio else 0.291f)
 
-        // Liquid (v0.3.6; smoothed + splashing in v0.3.8): fills from
-        // the BOTTOM by level. Its surface is a plane tilted by the
-        // sloshing angle plus travelling waves; the wave height grows
-        // with the sloshing energy, so a tilt makes the surface visibly
-        // slosh and then calm down — and a shake makes it splash.
+        clipPath.reset()
+        clipPath.addRoundRect(innerRect, innerRadius, innerRadius, Path.Direction.CW)
+        canvas.save()
+        canvas.clipPath(clipPath)
+
+        // Layer 0: Subtle glass cavity cylinder shading
+        cavityCylShader?.let {
+            liquidPaint.shader = it
+            canvas.drawRect(innerRect, liquidPaint)
+            liquidPaint.shader = null
+        }
+
         val fillH = innerRect.height() * (levelPercent / 100f)
         if (fillH > 0.5f) {
-            clipPath.reset()
-            clipPath.addRoundRect(innerRect, innerRadius, innerRadius, Path.Direction.CW)
-            canvas.save()
-            canvas.clipPath(clipPath)
-            // Wave parameters are shared with the particle physics
-            // (computeWave), so droplets land on the surface that is
-            // actually drawn.
-            val wp = computeWave(kind)
-            val baseY = wp[0]; val tanA = wp[1]
-            val amp1 = wp[2]; val amp2 = wp[3]; val amp3 = wp[4]; val ampR = wp[5]
-            val kf1 = wp[6]; val kf2 = wp[7]; val wavePhase = wp[8]
-            val innerW = innerRect.width()
-            // 44 samples joined by midpoint quadratics: the surface is
-            // a smooth curve, never a faceted polyline (v0.3.8). Each
-            // sample also carries its surface-chain particle's ripple
-            // offset (v0.3.9), so the drawn surface is the particles'
-            // surface. Buffers are fields — no onDraw allocation.
+            val iw = innerRect.width()
+            val ih = innerRect.height()
             val steps = SURFACE_STEPS
+            val depthH = iw * (0.062f + 0.022f * splashLevel())
+            val meniscusClimb = dp(2.2f) * maxOf(sizeScale, 0.6f)
+            val leftJetPx = liquidSim.leftJetH * ih
+            val rightJetPx = liquidSim.rightJetH * ih
+            // Subtle micro-ripple overlay so even calm water shimmers organically
+            val microAmp = when (kind) {
+                FaceKind.HOT -> dp(1.2f)
+                FaceKind.CHARGING -> dp(0.8f)
+                FaceKind.SAVING -> dp(0.55f)
+                FaceKind.UNKNOWN -> 0f
+            } * maxOf(sizeScale, 0.6f)
+            val wavePhase = phase * (if (kind == FaceKind.HOT) 2.2f else 0.9f)
+
             for (i in 0..steps) {
-                surfX[i] = innerRect.left + innerW * (i / steps.toFloat())
-                surfY[i] = surfaceY(surfX[i], baseY, tanA, amp1, amp2, kf1, kf2, wavePhase, amp3, ampR) +
-                    rippleY[i]
+                val u = i / steps.toFloat()
+                val x = innerRect.left + iw * u
+                surfX[i] = x
+                // Surface tension slight upward climb right at the glass walls
+                val edgeDist = min(u, 1f - u)
+                val climb = -meniscusClimb * exp((-edgeDist / 0.055f).toDouble()).toFloat()
+                // Wall-impact splash tongue rising sharply up the glass walls
+                val jetLift = -(
+                    leftJetPx * exp((-u / 0.068f).toDouble()).toFloat() +
+                        rightJetPx * exp((-(1f - u) / 0.068f).toDouble()).toFloat()
+                    )
+                val microF = microAmp * sin((u * 6.283f * 1.4f - wavePhase).toDouble()).toFloat()
+                val microB = microAmp * 0.8f * sin((u * 6.283f * 1.4f - wavePhase + 1.6f).toDouble()).toFloat()
+                val hFront = liquidSim.surfaceAt(u)
+                val hBack = liquidSim.backSurfaceAt(u)
+                surfY[i] = (innerRect.bottom - hFront * ih + climb + jetLift + microF)
+                    .coerceIn(innerRect.top - dp(4f), innerRect.bottom + dp(2f))
+                backSurfY[i] = (innerRect.bottom - hBack * ih - depthH + climb * 0.75f + jetLift * 0.55f + microB)
+                    .coerceIn(innerRect.top - dp(4f), innerRect.bottom + dp(2f))
             }
-            // Liquid region: up the left edge, along the smoothed
-            // surface, down the right edge, closed along the bottom.
+
+            // Layer 1: Back liquid surface
+            backWavePath.reset()
+            backWavePath.moveTo(innerRect.left - dp(2f), innerRect.bottom + dp(2f))
+            backWavePath.lineTo(innerRect.left - dp(2f), backSurfY[0])
+            traceCurve(backWavePath, backSurfY)
+            backWavePath.lineTo(innerRect.right + dp(2f), backSurfY[steps])
+            backWavePath.lineTo(innerRect.right + dp(2f), innerRect.bottom + dp(2f))
+            backWavePath.close()
+            liquidPaint.color = palette.backLiquidColor
+            canvas.drawPath(backWavePath, liquidPaint)
+            liquidPaint.alpha = 255
+
+            // Layer 2: Front liquid body (depth + cylinder curvature + caustic)
             wavePath.reset()
             wavePath.moveTo(innerRect.left - dp(2f), innerRect.bottom + dp(2f))
             wavePath.lineTo(innerRect.left - dp(2f), surfY[0])
-            traceSurface(wavePath)
-            edgePath.reset()
-            edgePath.moveTo(surfX[0], surfY[0])
-            traceSurface(edgePath)
+            traceCurve(wavePath, surfY)
             wavePath.lineTo(innerRect.right + dp(2f), surfY[steps])
             wavePath.lineTo(innerRect.right + dp(2f), innerRect.bottom + dp(2f))
             wavePath.close()
+
             liquidPaint.shader = palette.liquid
             canvas.drawPath(wavePath, liquidPaint)
+            liquidCylShader?.let {
+                liquidPaint.shader = it
+                canvas.drawPath(wavePath, liquidPaint)
+            }
+            palette.caustic?.let {
+                liquidPaint.shader = it
+                canvas.drawPath(wavePath, liquidPaint)
+            }
             liquidPaint.shader = null
-            // Droplet particles leap from the surface and fall back,
-            // inside this same clip — never outside the shell.
+
+            // Layer 3: 3D Meniscus top surface ribbon + refraction underside + bright edge
+            ribbonPath.reset()
+            ribbonPath.moveTo(surfX[0], backSurfY[0])
+            traceCurve(ribbonPath, backSurfY)
+            ribbonPath.lineTo(surfX[steps], surfY[steps])
+            traceCurveReverse(ribbonPath, surfY)
+            ribbonPath.close()
+            liquidPaint.color = palette.meniscusFillColor
+            canvas.drawPath(ribbonPath, liquidPaint)
+            liquidPaint.alpha = 255
+
+            // Back edge (subtle)
+            backEdgePath.reset()
+            backEdgePath.moveTo(surfX[0], backSurfY[0])
+            traceCurve(backEdgePath, backSurfY)
+            liquidEdgePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.55f)
+            liquidEdgePaint.alpha = 115
+            liquidEdgePaint.strokeWidth = dp(1.2f) * maxOf(sizeScale, 0.6f)
+            canvas.drawPath(backEdgePath, liquidEdgePaint)
+
+            // Front meniscus underside shadow (refraction thickness)
+            val underDy = dp(1.6f) * maxOf(sizeScale, 0.6f)
+            underEdgePath.reset()
+            underEdgePath.moveTo(surfX[0], surfY[0] + underDy)
+            var ux = surfX[0]; var uy = surfY[0] + underDy
+            for (i in 1..steps) {
+                val nx = surfX[i]; val ny = surfY[i] + underDy
+                underEdgePath.quadTo(ux, uy, (ux + nx) / 2f, (uy + ny) / 2f)
+                ux = nx; uy = ny
+            }
+            underEdgePath.lineTo(ux, uy)
+            liquidEdgePaint.color = ColorUtils.blendARGB(palette.accent, Color.BLACK, 0.35f)
+            liquidEdgePaint.alpha = 72
+            liquidEdgePaint.strokeWidth = dp(2.0f) * maxOf(sizeScale, 0.6f)
+            canvas.drawPath(underEdgePath, liquidEdgePaint)
+
+            // Layer 4: Airborne splash droplets, wall-clinging drops & 3D bubbles
             drawDropParticles(canvas, palette)
-            // Bubbles rise through the liquid, under its bright surface.
-            drawBubbles(canvas, palette, kind, baseY, fillH)
-            // Bright meniscus line along the surface — the clearest line
-            // inside the shell.
-            liquidEdgePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.65f)
+            drawBubbles(canvas, palette, kind, fillH)
+
+            // Crisp bright front meniscus line
+            edgePath.reset()
+            edgePath.moveTo(surfX[0], surfY[0])
+            traceCurve(edgePath, surfY)
+            liquidEdgePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.80f)
             liquidEdgePaint.alpha = 235
-            liquidEdgePaint.strokeWidth = dp(2.3f) * maxOf(sizeScale, 0.6f)
+            liquidEdgePaint.strokeWidth = dp(2.0f) * maxOf(sizeScale, 0.6f)
             canvas.drawPath(edgePath, liquidEdgePaint)
-            canvas.restore()
+
+            // Pure white specular glint across the left-center wave crest
+            val gStart = steps / 6
+            val gEnd = (steps * 5) / 11
+            glintPath.reset()
+            glintPath.moveTo(surfX[gStart], surfY[gStart])
+            var gx = surfX[gStart]; var gy = surfY[gStart]
+            for (i in (gStart + 1)..gEnd) {
+                val nx = surfX[i]; val ny = surfY[i]
+                glintPath.quadTo(gx, gy, (gx + nx) / 2f, (gy + ny) / 2f)
+                gx = nx; gy = ny
+            }
+            glintPath.lineTo(gx, gy)
+            liquidEdgePaint.color = Color.WHITE
+            liquidEdgePaint.alpha = 210
+            liquidEdgePaint.strokeWidth = dp(1.5f) * maxOf(sizeScale, 0.6f)
+            canvas.drawPath(glintPath, liquidEdgePaint)
+            liquidEdgePaint.alpha = 255
         }
 
+        // Layer 5: Front glass tube highlights (subtle parallax with tilt)
+        drawGlassHighlights(canvas)
+        canvas.restore()
+    }
+
+    /** Vertical glass tube specular bars over the cavity & liquid. */
+    private fun drawGlassHighlights(canvas: Canvas) {
+        val iw = innerRect.width()
+        val ih = innerRect.height()
+        val tiltShift = (sloshAngle * iw * 0.032f).coerceIn(-iw * 0.04f, iw * 0.04f)
+        glassLeftShader?.let { shader ->
+            val glX = innerRect.left + iw * 0.10f + tiltShift
+            val glW = iw * 0.078f
+            glassRect.set(glX, innerRect.top + ih * 0.05f, glX + glW, innerRect.bottom - ih * 0.07f)
+            liquidPaint.shader = shader
+            canvas.drawRoundRect(glassRect, glW * 0.5f, glW * 0.5f, liquidPaint)
+            // Narrower crisp specular core
+            val coreW = glW * 0.36f
+            glassRect.set(glX + glW * 0.24f, innerRect.top + ih * 0.08f, glX + glW * 0.24f + coreW, innerRect.bottom - ih * 0.11f)
+            canvas.drawRoundRect(glassRect, coreW * 0.5f, coreW * 0.5f, liquidPaint)
+        }
+        glassRightShader?.let { shader ->
+            val grX = innerRect.right - iw * 0.12f + tiltShift * 0.5f
+            val grW = iw * 0.034f
+            glassRect.set(grX, innerRect.top + ih * 0.09f, grX + grW, innerRect.bottom - ih * 0.09f)
+            liquidPaint.shader = shader
+            canvas.drawRoundRect(glassRect, grW * 0.5f, grW * 0.5f, liquidPaint)
+        }
+        liquidPaint.shader = null
     }
 
     /**
-     * Bubble particles rising through the liquid (particles since
-     * v0.3.9; the motion itself dates to v0.3.6). Almost none when
-     * saving (the liquid is nearly still), livelier when burning, a
-     * steady rise when charging — "filling up". Each particle keeps
-     * its own height / speed / wobble and respawns at the bottom;
-     * frozen mid-rise when the animator is off (reduced motion).
+     * 3D rim-lit bubble particles advected by [LiquidPhysics]: translucent
+     * interior, bright thin rim, and a tiny upper-left specular dot.
      */
-    private fun drawBubbles(canvas: Canvas, palette: Palette, kind: FaceKind, baseY: Float, fillH: Float) {
+    private fun drawBubbles(canvas: Canvas, palette: Palette, kind: FaceKind, fillH: Float) {
         val heatActivity = heatScene?.takeIf { it.heat != null }?.particleActivity
-        val (count, alpha) = when {
+        val (baseCount, baseAlpha) = when {
             kind == FaceKind.UNKNOWN -> return
             kind != FaceKind.CHARGING && heatActivity != null ->
-                heatBubbleCount(heatActivity) to (80f + 60f * heatActivity).toInt()
-            kind == FaceKind.HOT -> BUBBLE_COUNTS[0] to 130
-            kind == FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 120
-            else -> BUBBLE_COUNTS[2] to 70
+                heatBubbleCount(heatActivity) to (115f + 65f * heatActivity).toInt()
+            kind == FaceKind.HOT -> BUBBLE_COUNTS[0] to 175
+            kind == FaceKind.CHARGING -> BUBBLE_COUNTS[1] to 155
+            else -> BUBBLE_COUNTS[2] to 115
         }
-        if (count == 0 || fillH < dp(24f)) return
-        bubblePaint.color = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.55f)
-        val bottom = innerRect.bottom - dp(3f)
-        val span = fillH - dp(12f)
-        if (span < dp(8f)) return
+        val count = (baseCount + (liquidSim.aeration * 8f).toInt()).coerceIn(0, BUBBLE_POOL)
+        if (count == 0 || fillH < dp(20f)) return
+        val fillCol = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.45f)
+        val rimCol = ColorUtils.blendARGB(palette.accent, Color.WHITE, 0.86f)
+        bubbleRimPaint.strokeWidth = maxOf(dp(0.65f), dp(0.85f) * sizeScale)
+        val iw = innerRect.width()
+        val ih = innerRect.height()
         for (i in 0 until count) {
-            val b = bubblePs[i]
-            initBubble(b, i)
-            val x = innerRect.left + innerRect.width() * b.xF +
-                sin(splashClock * 1.3f + b.wob).toFloat() * dp(1.5f)
-            val y = bottom - b.yF * span
-            val fade = sin(Math.PI * min(b.yF * 1.15f, 1f)).toFloat()
-            bubblePaint.alpha = (alpha * fade).toInt().coerceIn(0, 255)
-            canvas.drawCircle(x, y, b.r, bubblePaint)
+            val b = liquidSim.bubbles[i]
+            if (!b.init) continue
+            val r = (b.r * iw).coerceIn(dp(0.75f), dp(3.4f))
+            val x = (innerRect.left + iw * b.x +
+                sin(splashClock * 1.4f + b.wob).toFloat() * dp(1.2f))
+                .coerceIn(innerRect.left + r + dp(2f), innerRect.right - r - dp(2f))
+            val y = innerRect.bottom - b.y * ih
+            val sIdx = (((x - innerRect.left) / iw).coerceIn(0f, 1f) * SURFACE_STEPS).toInt()
+            val localSurf = surfY[sIdx] + r + dp(2f)
+            if (y <= localSurf || y >= innerRect.bottom - r) continue
+            val depthFrac = ((innerRect.bottom - y) / maxOf(1f, innerRect.bottom - localSurf)).coerceIn(0f, 1f)
+            val fade = sin(Math.PI * min(depthFrac * 1.15f, 1f)).toFloat()
+            val a = (baseAlpha * fade).toInt().coerceIn(0, 255)
+            if (a < 8) continue
+            bubblePaint.color = fillCol
+            bubblePaint.alpha = (a * 0.35f).toInt()
+            canvas.drawCircle(x, y, r, bubblePaint)
+            bubbleRimPaint.color = rimCol
+            bubbleRimPaint.alpha = a
+            canvas.drawCircle(x, y, r, bubbleRimPaint)
+            bubblePaint.color = Color.WHITE
+            bubblePaint.alpha = (a * 1.15f).toInt().coerceAtMost(235)
+            val sr = maxOf(dp(0.45f), r * 0.30f)
+            canvas.drawCircle(x - r * 0.32f, y - r * 0.32f, sr, bubblePaint)
         }
         bubblePaint.alpha = 255
+        bubbleRimPaint.alpha = 255
     }
 
     // The drawn charging bolt that stood here until v0.3.29 was
@@ -1623,15 +1661,39 @@ class BatteryFaceView @JvmOverloads constructor(
 
     companion object {
         /**
-         * v0.4.1 minimal scene (the user's instruction: body +
-         * liquid only, no decoration). While true, drawFace and
-         * the widget's still paint just the liquid and the body
-         * photograph; the full diorama composition below stays
-         * compiled and tested so the cast can return in stages
-         * by turning this off. (WidgetFaceRenderer keeps its own
-         * copy of the switch — the two faces must agree.)
+         * Integrated battery + pedestal base with liquid, face parts
+         * (split-eye blink + mouth) and charging lightning. Hotter
+         * stages switch automatically once the "battery + ground"
+         * spec is wired in [DioramaArt.stageSpec].
+         * (WidgetFaceRenderer keeps its own copy — the two must agree.)
          */
-        const val MINIMAL_SCENE = true
+        const val INTEGRATED_STAGE = true
+
+        /** Legacy v0.4.1 minimal scene (used only when INTEGRATED_STAGE is false). */
+        const val MINIMAL_SCENE = false
+
+        /**
+         * Rect (dp) for an integrated battery + pedestal base image inside
+         * the face slot. Fits up to 90% of slot width (matching the approved
+         * home screen vision) while leaving a small bottom margin above the
+         * pulled-up level line.
+         */
+        fun stageRectDp(slotWDp: Float, slotHDp: Float, aspectRatio: Float): RectF {
+            val zoneScale = (slotHDp / 320f).coerceAtMost(1f)
+            val topZone = 10f * zoneScale
+            val bottomZone = 14f * zoneScale
+            val availH = (slotHDp - topZone - bottomZone).coerceAtLeast(30f)
+            var stageH = min(availH, 296f)
+            var stageW = stageH * aspectRatio
+            val maxStageW = slotWDp * 0.90f
+            if (stageW > maxStageW) {
+                stageW = maxStageW
+                stageH = stageW / aspectRatio
+            }
+            val left = (slotWDp - stageW) / 2f
+            val top = topZone + (availH - stageH) * 0.50f
+            return RectF(left, top, left + stageW, top + stageH)
+        }
 
         /**
          * The battery body's rect (dp) inside a slot of the given
@@ -1663,24 +1725,10 @@ class BatteryFaceView @JvmOverloads constructor(
         }
 
         // Bubble counts per state: hot / charging / saving.
-        private val BUBBLE_COUNTS = intArrayOf(8, 7, 3)
-        private val BUBBLE_SEEDS = floatArrayOf(
-            0.11f, 0.53f, 0.83f, 0.31f, 0.67f, 0.23f, 0.97f, 0.41f,
-        )
-        // Slosh spring: stiffness and damping (ζ ≈ 0.5, under-damped).
-        private const val SLOSH_STIFFNESS = 30f
-        private const val SLOSH_DAMPING = 5.5f
-        // Surface sampling for the smoothed liquid curve (v0.3.8).
-        private const val SURFACE_STEPS = 44
-        // Particle liquid (v0.3.9): surface-chain spring (pull to the
-        // analytic wave), its damping, and the neighbour coupling that
-        // lets ripples travel along the chain.
-        private const val RIPPLE_K = 120f
-        private const val RIPPLE_C = 5.0f
-        private const val RIPPLE_COUPLE = 260f
-        // Fixed particle pools — sized once, never grown per frame.
-        private const val DROP_POOL = 24
-        private const val BUBBLE_POOL = 8
+        private val BUBBLE_COUNTS = intArrayOf(20, 12, 5)
+        // Surface sampling for the smoothed liquid curve.
+        private const val SURFACE_STEPS = LiquidPhysics.DEFAULT_COLS
+        private const val BUBBLE_POOL = LiquidPhysics.BUBBLE_POOL
 
         // Heat expression (v0.3.27): flame anchors around the body
         // (x / base-y as fractions of the body's width / height,
