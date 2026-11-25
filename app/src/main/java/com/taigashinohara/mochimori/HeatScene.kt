@@ -64,7 +64,21 @@ object HeatScene {
         val objects: Set<CoolObject>,
         /** 0…1: how lively the liquid's particles are. */
         val particleActivity: Float,
-    )
+        /** True when the battery temperature row is measurably NG (>= 40℃). */
+        val fever: Boolean = false,
+    ) {
+        /**
+         * Effective heat fed into [liquidColor]: a measurably hot battery
+         * ([fever]) never displays cool pale-blue liquid even when every
+         * other checklist item is OK (honest warmth floor at [FEVER_LIQUID_HEAT_FLOOR]).
+         */
+        val liquidHeat: Float?
+            get() = when {
+                heat == null -> null
+                fever -> maxOf(heat, FEVER_LIQUID_HEAT_FLOOR)
+                else -> heat
+            }
+    }
 
     /** The fixed item → cooling-object mapping (v0.3.27 spec). */
     val OBJECT_FOR: Map<SavingChecklist.Item, CoolObject> = mapOf(
@@ -129,6 +143,7 @@ object HeatScene {
             mouth = mouth,
             objects = objects,
             particleActivity = heat ?: 0f,
+            fever = fever,
         )
     }
 
@@ -138,6 +153,10 @@ object HeatScene {
     // HEAT_PEACH, and the hot anchor at 1.0.
     private const val HEAT_HOLD_END = 0.35f
     private const val HEAT_PEACH = 0.75f
+
+    /** Minimum effective heat for liquid colour when [Scene.fever] is true
+     *  (lands on the warm peach anchor #F0A868 instead of cool blue). */
+    const val FEVER_LIQUID_HEAT_FLOOR = HEAT_PEACH
 
     /**
      * The liquid's colour at a heat (0…1), as a packed ARGB int.

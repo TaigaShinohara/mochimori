@@ -172,4 +172,76 @@ class DioramaSceneTest {
             DioramaScene.of(scene(0.9f, mouth = HeatScene.Mouth.WAVY), false, false, false).mouth,
         )
     }
+
+    // ---- Two-base integrated stage (1A) & unknown honesty ----
+
+    @Test
+    fun stageBaseSwitchesAtHalfHeat() {
+        assertEquals(
+            DioramaScene.StageBase.GRASS,
+            DioramaScene.of(scene(0f), charging = false, saving = true, unknown = false).stageBase,
+        )
+        assertEquals(
+            DioramaScene.StageBase.GRASS,
+            DioramaScene.of(scene(0.49f), charging = false, saving = false, unknown = false).stageBase,
+        )
+        assertEquals(
+            DioramaScene.StageBase.DESERT,
+            DioramaScene.of(scene(0.50f), charging = false, saving = false, unknown = false).stageBase,
+        )
+        assertEquals(
+            DioramaScene.StageBase.DESERT,
+            DioramaScene.of(scene(1f), charging = false, saving = false, unknown = false).stageBase,
+        )
+        assertEquals(
+            DioramaScene.StageBase.GRASS,
+            DioramaScene.of(null, charging = false, saving = true, unknown = false).stageBase,
+        )
+    }
+
+    @Test
+    fun unknownNeverShowsDesertBaseOrFlames() {
+        val d = DioramaScene.of(
+            scene(1f, flameLevel = 3, mouth = HeatScene.Mouth.WAVY),
+            charging = false, saving = false, unknown = true,
+        )
+        assertEquals(DioramaScene.StageBase.GRASS, d.stageBase)
+        assertEquals(DioramaScene.Flame.NONE, d.flame)
+    }
+
+    // ---- Integrated stage layout contracts (1A / 2A / 3A) ----
+
+    @Test
+    fun stageLayoutCoversAllCoolObjectsAndGroundedRewardsOnly() {
+        // 2A: all 7 CoolObjects (including AIRCON) have fixed integrated-stage seats.
+        assertEquals(HeatScene.CoolObject.values().toSet(), DioramaArt.COOL_PROP_SEATS.keys)
+        // 3A: only grounded penguin & watermelon (no floating sparkle/snowflake).
+        assertEquals(
+            listOf(DioramaArt.Part.PENGUIN, DioramaArt.Part.WATERMELON),
+            DioramaArt.DECOR_SEATS.map { it.first },
+        )
+        assertTrue(DioramaArt.DECOR_SEATS.all { it.second.layer == DioramaArt.StageLayer.FRONT })
+        // Flames: back flames start at level 1, front foot flames appear only at level 3.
+        assertTrue(DioramaArt.STAGE_FLAME_SEATS.any { it.seat.layer == DioramaArt.StageLayer.BACK && it.minLevel == 1 })
+        assertTrue(DioramaArt.STAGE_FLAME_SEATS.any { it.seat.layer == DioramaArt.StageLayer.FRONT && it.minLevel == 3 })
+        assertTrue(DioramaArt.STAGE_FLAME_SEATS.filter { it.seat.layer == DioramaArt.StageLayer.FRONT }.all { it.minLevel == 3 })
+    }
+
+    @Test
+    fun computeStageBoundsReservesHeadroomAndSideMarginInsideSlot() {
+        val spec = DioramaArt.STAGE_GRASS
+        val b = DioramaArt.computeStageBounds(
+            availLeft = 10f, availTop = 20f, availRight = 350f, availBottom = 320f,
+            spec = spec, includePropHeadroom = true,
+        )
+        val topWithHeadroom = b.top - b.height * spec.headroomTopFrac
+        val bottomWithShadow = b.bottom + b.height * spec.headroomBottomFrac
+        val leftWithPad = b.left - b.width * spec.padSideFrac
+        val rightWithPad = b.right + b.width * spec.padSideFrac
+        assertTrue("top headroom clipped: $topWithHeadroom < 20", topWithHeadroom >= 19.9f)
+        assertTrue("bottom shadow clipped: $bottomWithShadow > 320", bottomWithShadow <= 320.1f)
+        assertTrue("left pad clipped: $leftWithPad < 10", leftWithPad >= 9.9f)
+        assertTrue("right pad clipped: $rightWithPad > 350", rightWithPad <= 350.1f)
+        assertEquals(spec.aspectRatio, b.width / b.height, 0.001f)
+    }
 }

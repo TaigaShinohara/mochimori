@@ -44,8 +44,13 @@ object DioramaScene {
 
     enum class Backdrop { COOL, MILD, HOT, DESERT }
     enum class Ground { GREEN, DRY, DESERT }
+    /** Two-base pedestal choice for the integrated diorama stage (GRASS < 0.50 heat, DESERT >= 0.50). */
+    enum class StageBase { GRASS, DESERT }
     enum class Mouth { SMILE, FLAT, OPEN, ZIGZAG }
     enum class Flame { NONE, SMALL, MEDIUM, LARGE }
+
+    /** Heat threshold at or above which the integrated stage switches from grass to cracked clay. */
+    const val DESERT_STAGE_HEAT_THRESHOLD = 0.50f
 
     data class Decision(
         val backdrop: Backdrop,
@@ -58,6 +63,8 @@ object DioramaScene {
         val steam: Boolean,
         /** The heat-0 reward decorations (design §4). */
         val decorations: Boolean,
+        /** Integrated 2-base pedestal choice (honestly stays GRASS when unknown or heat == null). */
+        val stageBase: StageBase = StageBase.GRASS,
     )
 
     /**
@@ -97,13 +104,18 @@ object DioramaScene {
             }
         }
         val flame = when {
-            charging -> Flame.NONE
+            charging || unknown -> Flame.NONE
             else -> when (scene?.flameLevel ?: 0) {
                 0 -> Flame.NONE
                 1 -> Flame.SMALL
                 2 -> Flame.MEDIUM
                 else -> Flame.LARGE
             }
+        }
+        val stageBase = when {
+            unknown || heat == null -> StageBase.GRASS
+            heat >= DESERT_STAGE_HEAT_THRESHOLD -> StageBase.DESERT
+            else -> StageBase.GRASS
         }
         // Sweat, steam and the decorations are expressions OF a
         // verdict: the unknown face (no verdict yet) never wears
@@ -117,6 +129,7 @@ object DioramaScene {
             sweat = topStage,
             steam = topStage,
             decorations = !unknown && heat != null && heat <= 0f,
+            stageBase = stageBase,
         )
     }
 }

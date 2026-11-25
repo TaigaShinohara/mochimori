@@ -289,7 +289,7 @@ class BatteryFaceView @JvmOverloads constructor(
         set(value) {
             field = value
             if (INTEGRATED_STAGE && lastW > 0 && lastH > 0) {
-                val spec = DioramaArt.stageSpec(currentDecision(currentKind()).ground)
+                val spec = DioramaArt.stageSpec(currentDecision(currentKind()).stageBase)
                 if (spec != activeSpec) updateGeometry(lastW, lastH, spec)
             }
             invalidate()
@@ -548,7 +548,7 @@ class BatteryFaceView @JvmOverloads constructor(
 
     private fun paletteFor(kind: FaceKind): Palette {
         if (kind == FaceKind.SAVING || kind == FaceKind.HOT) {
-            val heat = heatScene?.heat
+            val heat = heatScene?.liquidHeat
             if (heat != null) {
                 val accent = HeatScene.liquidColor(heat)
                 if (accent != heatAccentCache) {
@@ -661,7 +661,7 @@ class BatteryFaceView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         lastW = w
         lastH = h
-        val spec = DioramaArt.stageSpec(currentDecision(currentKind()).ground)
+        val spec = DioramaArt.stageSpec(currentDecision(currentKind()).stageBase)
         updateGeometry(w, h, spec)
     }
 
@@ -670,7 +670,7 @@ class BatteryFaceView @JvmOverloads constructor(
         layerRect.set(0f, 0f, w.toFloat(), h.toFloat())
         if (INTEGRATED_STAGE) {
             activeSpec = spec
-            val stageDp = stageRectDp(w / density, h / density, spec.aspectRatio)
+            val stageDp = stageRectDp(w / density, h / density, spec)
             stageRect.set(
                 stageDp.left * density, stageDp.top * density,
                 stageDp.right * density, stageDp.bottom * density,
@@ -991,13 +991,22 @@ class BatteryFaceView @JvmOverloads constructor(
         }
     }
 
+    private fun isDarkTheme(): Boolean =
+        (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
     private fun drawFace(canvas: Canvas, kind: FaceKind) {
         val palette = paletteFor(kind)
         if (INTEGRATED_STAGE) {
             val dio = currentDecision(kind)
-            val spec = DioramaArt.stageSpec(dio.ground)
+            val spec = DioramaArt.stageSpec(dio.stageBase)
             if (spec != activeSpec && lastW > 0 && lastH > 0) {
                 updateGeometry(lastW, lastH, spec)
+            }
+            val dark = isDarkTheme()
+            if (DioramaArt.STAGE_PROPS_READY) {
+                DioramaArt.drawStagePedestalShadow(canvas, stageRect, spec, dark)
+                drawStageProps(canvas, dio, kind, DioramaArt.StageLayer.BACK, dark)
             }
             drawLiquid(canvas, palette, kind)
             DioramaArt.drawInto(canvas, resources, spec.bodyPart, stageRect)
@@ -1006,6 +1015,12 @@ class BatteryFaceView @JvmOverloads constructor(
             }
             val eyes = if (blinkScale() < 0.55f) DioramaArt.Part.EYES_CLOSED else DioramaArt.Part.EYES_OPEN
             DioramaArt.drawStageFace(canvas, resources, stageRect, spec, eyes, dio.mouth)
+            if (DioramaArt.STAGE_PROPS_READY) {
+                drawStageProps(canvas, dio, kind, DioramaArt.StageLayer.FRONT, dark)
+                if (dio.steam) {
+                    drawStageSteam(canvas, dark)
+                }
+            }
             return
         }
         if (MINIMAL_SCENE) {
@@ -1053,6 +1068,71 @@ class BatteryFaceView @JvmOverloads constructor(
         if (dio.sweat) drawSweat(canvas)
         if (dio.steam) drawSteam(canvas)
         if (dio.decorations) drawDecorations(canvas)
+    }
+
+    /**
+     * Draws integrated-stage surrounding props for one depth [layer]
+     * (`BACK` behind the battery, `FRONT` on the front half of the pedestal).
+     * Cooling objects and grounded 7/7 rewards stay stationary; flames
+     * breathe gently anchored at their foot. Floating stickers (sweat /
+     * sparkle / snowflake) are omitted on the integrated stage.
+     */
+    private fun drawStageProps(
+        canvas: Canvas,
+        dio: DioramaScene.Decision,
+        kind: FaceKind,
+        layer: DioramaArt.StageLayer,
+        darkTheme: Boolean,
+    ) {
+        if (kind == FaceKind.UNKNOWN) return
+        val scene = heatScene
+        val flameLevel = DioramaArt.flameStageLevel(dio.flame)
+        if (flameLevel > 0) {
+            val flamePart = DioramaArt.flamePart(dio.flame)
+            val levelScale = DioramaArt.flameStageScale(dio.flame)
+            if (flamePart != null) {
+                for (i in DioramaArt.STAGE_FLAME_SEATS.indices) {
+                    val f = DioramaArt.STAGE_FLAME_SEATS[i]
+                    if (f.seat.layer != layer || flameLevel < f.minLevel) continue
+                    val pulse = 1f + 0.04f * sin(splashClock * 2.5f + i * 1.7f)
+                    DioramaArt.drawGrounded(
+                        canvas, resources, flamePart, stageRect, f.seat,
+                        scale = levelScale * f.stageScale * pulse,
+                        darkTheme = darkTheme,
+                    )
+                }
+            }
+        }
+        if (scene != null && scene.objects.isNotEmpty()) {
+            for (obj in HeatScene.CoolObject.values()) {
+                if (obj !in scene.objects) continue
+                val seat = DioramaArt.COOL_PROP_SEATS[obj] ?: continue
+                if (seat.layer != layer) continue
+                DioramaArt.drawGrounded(
+                    canvas, resources, DioramaArt.coolObjectPart(obj),
+                    stageRect, seat, darkTheme = darkTheme,
+                )
+            }
+        }
+        if (layer == DioramaArt.StageLayer.FRONT && dio.decorations) {
+            for ((part, seat) in DioramaArt.DECOR_SEATS) {
+                DioramaArt.drawGrounded(
+                    canvas, resources, part, stageRect, seat, darkTheme = darkTheme,
+                )
+            }
+        }
+    }
+
+    /** Sculpted steam rising gently off the silver cap at Stage 0. */
+    private fun drawStageSteam(canvas: Canvas, darkTheme: Boolean) {
+        val rise = frac(splashClock * 0.11f)
+        val alpha = (190f + 55f * sin(splashClock * 1.7f)).toInt().coerceIn(0, 255)
+        DioramaArt.drawGrounded(
+            canvas, resources, DioramaArt.Part.STEAM, stageRect, DioramaArt.STEAM_SEAT,
+            alpha = alpha,
+            dyPx = -rise * stageRect.height() * 0.025f,
+            darkTheme = darkTheme,
+        )
     }
 
     /** The backdrop board fills the whole face slot (cover-cropped). */
@@ -1674,26 +1754,36 @@ class BatteryFaceView @JvmOverloads constructor(
 
         /**
          * Rect (dp) for an integrated battery + pedestal base image inside
-         * the face slot. Fits up to 90% of slot width (matching the approved
-         * home screen vision) while leaving a small bottom margin above the
-         * pulled-up level line.
+         * the face slot. Delegates to [DioramaArt.computeStageBounds] so
+         * headroom for the parasol / cap steam / pedestal shadow turns on
+         * automatically with [DioramaArt.STAGE_PROPS_READY].
          */
-        fun stageRectDp(slotWDp: Float, slotHDp: Float, aspectRatio: Float): RectF {
+        fun stageRectDp(
+            slotWDp: Float,
+            slotHDp: Float,
+            spec: DioramaArt.StageSpec,
+            includePropHeadroom: Boolean = DioramaArt.STAGE_PROPS_READY,
+        ): RectF {
             val zoneScale = (slotHDp / 320f).coerceAtMost(1f)
             val topZone = 10f * zoneScale
             val bottomZone = 14f * zoneScale
-            val availH = (slotHDp - topZone - bottomZone).coerceAtLeast(30f)
-            var stageH = min(availH, 296f)
-            var stageW = stageH * aspectRatio
-            val maxStageW = slotWDp * 0.90f
-            if (stageW > maxStageW) {
-                stageW = maxStageW
-                stageH = stageW / aspectRatio
-            }
-            val left = (slotWDp - stageW) / 2f
-            val top = topZone + (availH - stageH) * 0.50f
-            return RectF(left, top, left + stageW, top + stageH)
+            val maxW = slotWDp * 0.90f
+            val sideInset = (slotWDp - maxW) / 2f
+            val b = DioramaArt.computeStageBounds(
+                availLeft = sideInset,
+                availTop = topZone,
+                availRight = slotWDp - sideInset,
+                availBottom = (slotHDp - bottomZone).coerceAtLeast(topZone + 30f),
+                spec = spec,
+                includePropHeadroom = includePropHeadroom,
+                maxStageH = 296f,
+            )
+            return RectF(b.left, b.top, b.right, b.bottom)
         }
+
+        /** Legacy aspect-only overload kept for callers passing a bare aspect ratio. */
+        fun stageRectDp(slotWDp: Float, slotHDp: Float, aspectRatio: Float): RectF =
+            stageRectDp(slotWDp, slotHDp, DioramaArt.STAGE_GRASS.copy(aspectRatio = aspectRatio), includePropHeadroom = false)
 
         /**
          * The battery body's rect (dp) inside a slot of the given

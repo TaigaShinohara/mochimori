@@ -123,7 +123,7 @@ object WidgetFaceRenderer {
                 Color.rgb(0x90, 0x90, 0x90),
             )
         }
-        val heat = scene?.heat
+        val heat = scene?.liquidHeat
         if (heat != null && (kind == Kind.SAVING || kind == Kind.HOT)) {
             accent = HeatScene.liquidColor(heat)
         }
@@ -136,26 +136,29 @@ object WidgetFaceRenderer {
         )
 
         if (INTEGRATED_STAGE) {
-            val spec = DioramaArt.stageSpec(dio.ground)
+            val spec = DioramaArt.stageSpec(dio.stageBase)
             val margin = 4f
-            val availW = VW - margin * 2f
-            val availH = VH - margin * 2f
-            var stageW = availW
-            var stageH = stageW / spec.aspectRatio
-            if (stageH > availH) {
-                stageH = availH
-                stageW = stageH * spec.aspectRatio
-            }
-            val stage = RectF(
-                (VW - stageW) / 2f, (VH - stageH) / 2f,
-                (VW + stageW) / 2f, (VH + stageH) / 2f,
+            val bounds = DioramaArt.computeStageBounds(
+                availLeft = margin,
+                availTop = margin,
+                availRight = VW - margin,
+                availBottom = VH - margin,
+                spec = spec,
+                includePropHeadroom = DioramaArt.STAGE_PROPS_READY,
             )
+            val stage = RectF(bounds.left, bounds.top, bounds.right, bounds.bottom)
             val win = RectF()
             DioramaArt.computeWindowRect(stage, spec, win)
-            val bodyW = stageW * spec.bodyWidthFrac
+            val bodyW = stage.width() * spec.bodyWidthFrac
             val k = (bodyW / 156f).coerceAtLeast(0.32f)
             val u: (Float) -> Float = { v -> v * k }
+            val darkTheme = (res.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
 
+            if (DioramaArt.STAGE_PROPS_READY) {
+                DioramaArt.drawStagePedestalShadow(canvas, stage, spec, darkTheme)
+                drawStageProps(canvas, res, dio, scene, kind, stage, DioramaArt.StageLayer.BACK, darkTheme)
+            }
             drawLiquid(canvas, kind, level, accent, win, spec.winRadiusRatio, u)
             DioramaArt.drawInto(canvas, res, spec.bodyPart, stage)
             if (kind == Kind.CHARGING) {
@@ -166,6 +169,15 @@ object WidgetFaceRenderer {
                 )
             }
             DioramaArt.drawStageFace(canvas, res, stage, spec, DioramaArt.Part.EYES_OPEN, dio.mouth)
+            if (DioramaArt.STAGE_PROPS_READY) {
+                drawStageProps(canvas, res, dio, scene, kind, stage, DioramaArt.StageLayer.FRONT, darkTheme)
+                if (dio.steam) {
+                    DioramaArt.drawGrounded(
+                        canvas, res, DioramaArt.Part.STEAM, stage, DioramaArt.STEAM_SEAT,
+                        alpha = 220, darkTheme = darkTheme,
+                    )
+                }
+            }
             return
         }
 
@@ -506,6 +518,53 @@ object WidgetFaceRenderer {
         )
         fill.shader = null
         canvas.restore()
+    }
+
+    /** Still-frame integrated-stage props matching BatteryFaceView's exact layer & seat specs. */
+    private fun drawStageProps(
+        canvas: Canvas,
+        res: Resources,
+        dio: DioramaScene.Decision,
+        scene: HeatScene.Scene?,
+        kind: Kind,
+        stage: RectF,
+        layer: DioramaArt.StageLayer,
+        darkTheme: Boolean,
+    ) {
+        if (kind == Kind.UNKNOWN) return
+        val flameLevel = DioramaArt.flameStageLevel(dio.flame)
+        if (flameLevel > 0) {
+            val flamePart = DioramaArt.flamePart(dio.flame)
+            val levelScale = DioramaArt.flameStageScale(dio.flame)
+            if (flamePart != null) {
+                for (f in DioramaArt.STAGE_FLAME_SEATS) {
+                    if (f.seat.layer != layer || flameLevel < f.minLevel) continue
+                    DioramaArt.drawGrounded(
+                        canvas, res, flamePart, stage, f.seat,
+                        scale = levelScale * f.stageScale,
+                        darkTheme = darkTheme,
+                    )
+                }
+            }
+        }
+        if (scene != null && scene.objects.isNotEmpty()) {
+            for (obj in HeatScene.CoolObject.values()) {
+                if (obj !in scene.objects) continue
+                val seat = DioramaArt.COOL_PROP_SEATS[obj] ?: continue
+                if (seat.layer != layer) continue
+                DioramaArt.drawGrounded(
+                    canvas, res, DioramaArt.coolObjectPart(obj),
+                    stage, seat, darkTheme = darkTheme,
+                )
+            }
+        }
+        if (layer == DioramaArt.StageLayer.FRONT && dio.decorations) {
+            for ((part, seat) in DioramaArt.DECOR_SEATS) {
+                DioramaArt.drawGrounded(
+                    canvas, res, part, stage, seat, darkTheme = darkTheme,
+                )
+            }
+        }
     }
 
     /** The still's flames: the stage's image at the live face's

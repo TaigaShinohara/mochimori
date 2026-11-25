@@ -253,4 +253,43 @@ class HeatSceneTest {
         // Alpha is always opaque.
         assertEquals(0xFF, HeatScene.liquidColor(0.25f) ushr 24)
     }
+
+    @Test fun feverRaisesLiquidHeatToWarmPeachFloorEvenWhenOthersAreOk() {
+        val entries = allItems.map {
+            entry(
+                it,
+                if (it == SavingChecklist.Item.TEMPERATURE) {
+                    SavingChecklist.Status.NG
+                } else {
+                    SavingChecklist.Status.OK
+                },
+            )
+        }
+        val scene = HeatScene.of(entries, charging = false)
+        assertTrue(scene.fever)
+        // Checklist heat remains the honest 1/7 NG share…
+        assertEquals(1f / 7f, scene.heat!!, 0.0001f)
+        // …while liquidHeat lifts to the warm peach floor so the water
+        // never looks cool blue while the battery is measurably hot.
+        assertEquals(HeatScene.FEVER_LIQUID_HEAT_FLOOR, scene.liquidHeat!!, 0.0001f)
+        assertEquals(0xFFF0A868.toInt(), HeatScene.liquidColor(scene.liquidHeat!!))
+    }
+
+    @Test fun nonFeverAndNullHeatKeepLiquidHeatUnchanged() {
+        val mild = HeatScene.of(
+            normal(
+                SavingChecklist.Item.BRIGHTNESS to SavingChecklist.Status.NG,
+                SavingChecklist.Item.TEMPERATURE to SavingChecklist.Status.OK,
+                SavingChecklist.Item.POWER_SAVER to SavingChecklist.Status.OK,
+                SavingChecklist.Item.WIFI to SavingChecklist.Status.OK,
+            ),
+            charging = false,
+        )
+        assertEquals(false, mild.fever)
+        assertEquals(0.25f, mild.liquidHeat!!, 0.0001f)
+        assertEquals(0xFF5EA9DD.toInt(), HeatScene.liquidColor(mild.liquidHeat!!))
+
+        val empty = HeatScene.of(emptyList(), charging = false)
+        assertNull(empty.liquidHeat)
+    }
 }
