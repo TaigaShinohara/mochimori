@@ -172,7 +172,7 @@ v0.4.0〜v0.4.2 の分離パーツ方式（`dio_body.webp` ＋ 横長に引き�
   - 窓穴の実測比: `winL = 0.4032f`, `winT = 0.2535f`, `winR = 0.5995f`, `winB = 0.6114f`
   - 液体クリップの潜らせ代と角丸: `winPadOfBodyW = 0.020f`（本体幅の 2.0% を四辺に拡張）、`winRadiusRatio = 0.295f`
 - **切替フラグとレイアウト**: `BatteryFaceView.INTEGRATED_STAGE = true` および `WidgetFaceRenderer.INTEGRATED_STAGE = true` で一体型ステージを有効化（旧 `MINIMAL_SCENE` は `false`、分離ベース用コードは後方互換として残置）。ホームの顔スロット内は `BatteryFaceView.stageRectDp` により上下ゾーン 10dp / 14dp（`zoneScale` 連動）を除き、スロット幅の最大 90%・高さ最大 296dp にアスペクト比維持で配置する。
-- **ステージ解決 `DioramaArt.stageSpec(ground)`**: 将来「バッテリー＋地面」ベースを追加した際に `StageSpec` を 1 エントリ足してマッピングを切り替えるだけで View とウィジェットが同時追従する構造。現在は `GREEN` / `DRY` / `DESERT` のすべてが暫定的に `STAGE_GRASS` を返す。
+- **ステージ解決 `DioramaArt.stageSpec(base)`**: `StageBase.GRASS` → `STAGE_GRASS`（`dio_body_grass.webp`）、`StageBase.DESERT` → `STAGE_DESERT`（`dio_body_desert.webp`、758×716px、52,938 bytes、窓穴 `winL=0.4011f, winT=0.2514f, winR=0.5989f, winB=0.6117f`）へ切り替える 2 ベース構成を実装済み（コミット `0c0cb91`）。芝生版をベースに足元のみを差し替え生成したため、バッテリー本体・窓座標は 1〜2px 誤差で一致する。
 
 #### 3-2. 顔パーツのおでこ再配置と口パーツ透過修正
 
@@ -201,14 +201,17 @@ v0.4.0〜v0.4.2 の分離パーツ方式（`dio_body.webp` ＋ 横長に引き�
   - 静止画の液体描画にも空洞円筒陰影・2.5D 背面液面・3D メニスカス上面リボン・縦深みグラデ＋円筒陰影＋コースティクス・3D リムライト気泡・前面ガラス管ハイライトを備え、ホーム画面と質感を一致させた。
   - `widget_mochi.xml` の `widget_face` 枠を `60dp × 76dp` から `76dp × 76dp` へ広げ、仮想キャンバス `160 × 160`（2 倍以上の高解像度 Bitmap 生成）と 1:1 の比率を揃えた。
 
-### 4. 未完了・保留事項と現在との境界（2026-11-25 時点）
+### 4. 周囲オブジェクト統合と完了状況（コミット `0c0cb91`・`ff9e80a` で完了）
 
-- **現在の実描画範囲**: `INTEGRATED_STAGE = true` 下で描画されているのは、**芝生一体型ベース（`dio_body_grass.webp`）＋ 窓内リアル液体 ＋ 充電中の稲妻 ＋ おでこの顔パーツ（点目2つ＋口）** のみ。
-- **保留中①（クォータ回復待ち）：「バッテリー＋地面（ひび割れ粘土）」一体型ベースの生成と切替**:
-  - 熱い完成図に対応する「ひび割れ粘土（`DRY` / `DESERT`）」台座の一体型ベース画像は未生成（クォータ回復待ち）。そのため現在は全熱さ段階で `STAGE_GRASS` が表示される。アセット生成後に `DioramaArt` へ新 `StageSpec` を追加し、`stageSpec(ground)` の `DRY` / `DESERT` 分岐を切り替えるだけで差し替えが完了する。
-- **保留中②（クォータ回復待ち）：周囲の賑やかしオブジェクトの統合**:
-  - 涼しい時の冷ます物・ご褒美飾り（ペンギン、スイカ等）、および熱い時の炎・湯気・汗は、一体型ベース導入後のステージ座標系への統合が未完了であり、現在 `INTEGRATED_STAGE = true` 経路では表示していない（旧分離ベース用の描画コードと座標は `INTEGRATED_STAGE = false` 側および `DioramaScene` に残置）。
-  - 統合時の留意点: 既存の `HeatScene.CoolObject` 7 種のうち壁掛け式のエアコン（`AIRCON`）は、台座の上に展開する涼しい完成図（`cool_battery_diorama_with_face_1795582074584.jpg`）には含まれておらず、7 項目マッピングの扱いと各オブジェクトの台座上配置設計を合わせて詰める必要がある。
+- **現在の実描画範囲（`INTEGRATED_STAGE = true` / `STAGE_PROPS_READY = true`）**:
+  - **2 種の一体型ベース**: 涼しい〜中盤は `dio_body_grass.webp`、暑い〜熱い段階は `dio_body_desert.webp` へ自動切替。
+  - **窓内リアル液体＋おでこの顔パーツ＋充電中の稲妻**: 6 層液体描画・`LiquidPhysics`・分割配置の点目＋口（まばたき対応）・充電時稲妻。
+  - **周囲の接地オブジェクト（前後レイヤー＋接地影）**: `DioramaArt.COOL_PROP_SEATS` / `DECOR_SEATS` / `STAGE_FLAME_SEATS` / `STEAM_SEAT` により、背後レイヤー（パラソル・風鈴・置き型ミニクーラー・扇風機・背後炎）→ 液体 → 一体型ベース → 稲妻 → 顔 → 手前レイヤー（氷・雪だるま・かき氷・ペンギン・スイカ・手前炎）→ キャップ上（湯気）の順で合成する。
+  - **クロマキー再生成アセット**: 欠けのあった白いパーツと新規表現を完成図画風で再生成して差し替え済み（`dio_parasol` 長い木製ポール版、`dio_ice`、`dio_snowman`、`dio_shaved_ice`、`dio_aircon` 地面自立の置き型ミニクーラー版、`dio_steam` 立体粘土カール版、`dio_flame_{s,m,l}` 立体粘土の炎3種）。旧ファイルは `.local/assets_v2/orig_backup/` に退避済み。
+  - **画面サイズ追従**: `computeStageBounds` で頭上ヘッドルーム（パラソル・湯気用 `0.24`）と下余白（台座影用 `0.06`）・左右余白（`0.06`）を確保し、チェックリスト展開時もジオラマ全体が比率を崩さず縮小して収まる。
+- **未完了・今後の整理候補**:
+  - Roborazzi 画面スナップショット（`MainActivityScreenTest`）のゴールデン更新（`.local/robolectric-deps` 環境依存）。
+  - 旧分離ベース用の未使用アセット（`dio_backdrop_*`, `dio_ground_*`, `dio_body`, `dio_sweat_*`, `dio_sparkle`, `dio_snowflake`）および `INTEGRATED_STAGE = false` 経路の将来クリーンアップ。
 
 ## Simple Glass の採用（v0.3.8、本人の決定 2026-11-19／v0.3.10 で作風として統一、本人の決定 2026-11-20）【v0.3.21 で終了・経緯の記録】
 

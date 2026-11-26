@@ -350,7 +350,7 @@ object DioramaArt {
             minLevel = 2, stageScale = 0.92f,
         ),
         FlameSeat(
-            PropSeat(0.65f, 0.34f, 0.22f, 0.38f, StageLayer.BACK, castShadow = false),
+            PropSeat(0.68f, 0.34f, 0.22f, 0.38f, StageLayer.BACK, castShadow = false),
             minLevel = 3, stageScale = 1.05f,
         ),
         FlameSeat(
